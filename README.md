@@ -99,6 +99,10 @@ node package.mjs --output ./dist
 
 Windows 原生检查使用 `tests/windows.test.ps1`，还需编译 `scripts/install/Service.cs`；macOS 托盘依赖 Cocoa，需在对应系统上验收。运行真实插件可能访问本机账户和网络，自动测试应使用隔离夹具。
 
+## 提交规范
+
+提交标题和正文使用中文，说明实际改动及必要的验证结果，例如“修复 macOS 临时目录下的安装包构建入口”。不要只写版本号、“同步插件”或笼统的“更新”。正文只描述本插件的公开变更，不包含账号、凭据或私有环境信息；已有提交历史不通过强推改写。
+
 ## 许可
 
 采用 [MIT License](LICENSE)。随附 WebSocket 实现的第三方许可见 [第三方许可](vendor/ws/WS-LICENSE)，来源记录见 [来源记录](vendor/ws/WS-SOURCE.json)。

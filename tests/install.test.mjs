@@ -78,3 +78,23 @@ test('streamed dependency bytes are verified before replacing an existing execut
     assert.equal(await readFile(target, 'utf8'), 'firstsecond');
   } finally { globalThis.fetch = original; await rm(folder, {recursive: true, force: true}); }
 });
+
+test('package CLI invoked through a linked temporary checkout actually builds installers', async () => {
+  const { symlink } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const folder = await mkdtemp(path.join(os.tmpdir(), 'biuuka-cli-link-'));
+  try {
+    const source = fileURLToPath(new URL('../', import.meta.url));
+    const linked = path.join(folder, 'linked-source');
+    await symlink(source, linked, process.platform === 'win32' ? 'junction' : 'dir');
+    const output = path.join(folder, 'artifacts');
+    await promisify(execFile)(process.execPath, [path.join(linked, 'package.mjs'), '--output', output]);
+    const manifest = JSON.parse(await readFile(path.join(output, 'latest.json'), 'utf8'));
+    for (const name of ['biuuka.zip', 'install.cmd', 'install.sh', 'uninstall.ps1']) {
+      const digest = createHash('sha256').update(await readFile(path.join(output, name))).digest('hex');
+      assert.equal(digest, manifest.files[name].sha256);
+    }
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});

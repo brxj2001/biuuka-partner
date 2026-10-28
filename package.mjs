@@ -1,5 +1,5 @@
 import {VERSION, RELEASE} from './release.mjs';
-import { mkdir, readFile, writeFile, cp, rm, mkdtemp } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, cp, rm, mkdtemp, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { deflateRawSync, crc32 } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
@@ -140,4 +140,5 @@ export async function packageBiuuka({output = path.join(here,'dist')} = {}) {
   } finally { await rm(stage, { recursive: true, force: true }); await rm(lockDir, { recursive: true, force: true }); }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await packageBiuuka(process.argv[2] === '--output' && process.argv[3] ? {output:path.resolve(process.argv[3])} : {});
+// macOS /var and /private/var (and linked checkouts) identify the same entry.
+if (process.argv[1] && await realpath(path.resolve(process.argv[1])).catch(() => null) === await realpath(fileURLToPath(import.meta.url))) await packageBiuuka(process.argv[2] === '--output' && process.argv[3] ? {output:path.resolve(process.argv[3])} : {});

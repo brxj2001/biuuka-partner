@@ -1,0 +1,49 @@
+import {VERSION, RELEASE} from './release.mjs';
+import { mkdir, readFile, writeFile, cp, rm, mkdtemp } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { deflateRawSync, crc32 } from 'node:zlib';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+const here = path.dirname(fileURLToPath(import.meta.url));
+const runtimeFiles = ['release.mjs','release.json','desktop-switch.mjs','desktop-switch.ps1','desktop-switch-macos.js','accounts.mjs','tray-control.mjs','local-profile.mjs','uninstall.mjs','uninstall-windows.ps1','chatgpt-install.mjs','chatgpt-install.ps1','brand.svg','brand.png','brand.ico','merchant.mjs','subscription.mjs','version.mjs','tray.mjs','tray-macos.js','tray-windows.ps1','live.mjs','ports.mjs','ws.cjs','WS-LICENSE','WS-SOURCE.json','access.mjs','control.mjs','console.html','console.js','console.css','pair.html','external-sdk.js','network.mjs','offline.mjs','state.mjs','records.mjs','update.mjs','supervisor.mjs','launcher.mjs','LICENSE','Service.cs','app.js','bridge.mjs','cli.mjs','index.html','mac-service.mjs','pair.js','run.ps1','runtime.mjs','server.mjs','setup.mjs','sources.json','style.css','windows.ps1'];
+const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+export async function packageBiuuka({output = path.join(here,'dist')} = {}) {
+  await mkdir(output, { recursive: true });
+  const lockDir = path.join(output, 'package.lock'); await mkdir(lockDir);
+  const stage = await mkdtemp(path.join(output, 'stage-'));
+  try {
+    for (const name of runtimeFiles) {
+      if (name.endsWith('.ps1')) await writeFile(path.join(stage, name), '\ufeff' + await readFile(path.join(here, name), 'utf8'));
+      else await cp(path.join(here, name), path.join(stage, name));
+    }
+    const build=hash(Buffer.concat(await Promise.all([...runtimeFiles].sort().map(async name=>Buffer.concat([Buffer.from(name),await readFile(path.join(stage,name))])))));
+    await writeFile(path.join(stage,'build-info.json'),JSON.stringify({version:VERSION,build,updateProtocol:RELEASE.updateProtocol}));
+    const packagedFiles=[...runtimeFiles,'build-info.json'];
+    const archive = path.join(output, 'biuuka.zip');
+    // Deterministic ZIP (UTF-8 names, fixed date), built with Node only.
+    const local = [], central = []; let offset = 0;
+    for (const name of [...packagedFiles].sort()) {
+      const data = await readFile(path.join(stage, name)), packed = deflateRawSync(data), filename = Buffer.from(name);
+      const header = Buffer.alloc(30); header.writeUInt32LE(0x04034b50); header.writeUInt16LE(20,4); header.writeUInt16LE(0x800,6); header.writeUInt16LE(8,8); header.writeUInt16LE(23585,12);
+      header.writeUInt32LE(crc32(data),14); header.writeUInt32LE(packed.length,18); header.writeUInt32LE(data.length,22); header.writeUInt16LE(filename.length,26);
+      const entry = Buffer.alloc(46); entry.writeUInt32LE(0x02014b50); entry.writeUInt16LE(20,4); header.copy(entry,6,4,30); entry.writeUInt32LE(offset,42);
+      local.push(header,filename,packed); central.push(entry,filename); offset += header.length + filename.length + packed.length;
+    }
+    const directory = Buffer.concat(central), end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50); end.writeUInt16LE(packagedFiles.length,8); end.writeUInt16LE(packagedFiles.length,10); end.writeUInt32LE(directory.length,12); end.writeUInt32LE(offset,16);
+    await writeFile(archive, Buffer.concat([...local,directory,end]));
+    const bytes = await readFile(archive), digest = hash(bytes), b64 = bytes.toString('base64').match(/.{1,120}/g).join('\n');
+    const sources = JSON.parse(await readFile(path.join(here, 'sources.json'), 'utf8'));
+    const sh = (await readFile(path.join(here, 'install-macos.sh'), 'utf8')).replace('__PACKAGE_SHA__', digest)
+      .replace('__NODE_ARM64_SHA__', sources['darwin-arm64'].node.digest).replace('__NODE_X64_SHA__', sources['darwin-x64'].node.digest);
+    await writeFile(path.join(output, 'install.sh'), sh + b64 + '\n', { mode: 0o755 });
+    const ps = `$ErrorActionPreference='Stop'; Write-Host '[1/6] Verifying and unpacking Biuuka service files...'; $r=[IO.File]::ReadAllText($env:BIUUKA_BOOT); $m='# BIUUKA_PAYLOAD'; $b=[Convert]::FromBase64String($r.Substring($r.LastIndexOf($m)+$m.Length)); $sha=[Security.Cryptography.SHA256]::Create(); if(([BitConverter]::ToString($sha.ComputeHash($b))).Replace('-','').ToLowerInvariant() -ne '${digest}'){throw 'Package checksum mismatch'}; $d=Join-Path $env:TEMP ('biuuka-install-'+[guid]::NewGuid().ToString('N')); New-Item -ItemType Directory $d | Out-Null; [IO.File]::WriteAllBytes((Join-Path $d 'package.zip'),$b); Expand-Archive (Join-Path $d 'package.zip') (Join-Path $d 'app'); & (Join-Path $PSHOME 'powershell.exe') -NoProfile -ExecutionPolicy Bypass -File (Join-Path $d 'app/windows.ps1'); $code=$LASTEXITCODE; if($code -eq 0){Remove-Item -LiteralPath $d -Recurse -Force}else{Write-Host ('Installation failed. Diagnostic package preserved at: '+$d)}; exit $code`;
+    const cmd = `@echo off\r\nsetlocal\r\nset "BIUUKA_INSTALL_SOURCE=%~1"\r\nset "BIUUKA_BOOT=%~f0"\r\nset "BIUUKA_PS=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"\r\nif exist "%SystemRoot%\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe" set "BIUUKA_PS=%SystemRoot%\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe"\r\n"%BIUUKA_PS%" -NoProfile -ExecutionPolicy Bypass -Command "${ps}"\r\nif errorlevel 1 exit /b %errorlevel%\r\nendlocal & set "PATH=%ProgramFiles%\\Biuuka;%PATH%"\r\nexit /b 0\r\n# BIUUKA_PAYLOAD\r\n${b64.replaceAll('\n', '\r\n')}\r\n`;
+    await writeFile(path.join(output, 'install.cmd'), cmd);
+    await writeFile(path.join(output,'uninstall.ps1'),'\ufeff'+await readFile(path.join(here,'uninstall-windows.ps1'),'utf8'));
+    for (const file of ['biuuka.zip', 'install.cmd', 'install.sh','uninstall.ps1']) await writeFile(path.join(output, file + '.sha256'), `${hash(await readFile(path.join(output, file)))}  ${file}\n`);
+    await writeFile(path.join(output, 'latest.json'), JSON.stringify({ version: VERSION, build, updateProtocol:1, channel: RELEASE.channel, github: RELEASE.repository, files: Object.fromEntries(await Promise.all(['install.cmd','install.sh','biuuka.zip','uninstall.ps1'].map(async name => [name, { sha256: hash(await readFile(path.join(output, name))) }]))) }, null, 2) + '\n');
+    console.log(`Biuuka Windows/macOS installers: ${output}\nDependencies are downloaded only when needed; pinned checksums verified on installation.\nNo production components restarted.`);
+  } finally { await rm(stage, { recursive: true, force: true }); await rm(lockDir, { recursive: true, force: true }); }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await packageBiuuka(process.argv[2] === '--output' && process.argv[3] ? {output:path.resolve(process.argv[3])} : {});

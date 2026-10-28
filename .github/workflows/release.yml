@@ -1,0 +1,33 @@
+name: 检查 Biuuka 开发版
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test *.test.mjs
+      - run: node package.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: biuuka-installers
+          path: dist/*
+  windows-native:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 检查 PowerShell 安装与托盘脚本
+        shell: pwsh
+        run: ./windows.test.ps1
+      - name: 编译 Windows 原生服务宿主
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -Path Service.cs -ReferencedAssemblies System.ServiceProcess.dll,System.dll -OutputAssembly "$env:TEMP\BiuukaService.exe" -OutputType WindowsApplication

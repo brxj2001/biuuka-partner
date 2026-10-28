@@ -1,0 +1,8 @@
+{
+  "version": "8.22.0",
+  "url": "https://registry.npmjs.org/ws/-/ws-8.22.0.tgz",
+  "integrity": "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==",
+  "upstream": "https://github.com/websockets/ws",
+  "build": "esbuild index.js --bundle --platform=node --format=cjs --external:bufferutil --external:utf-8-validate --outfile=ws.cjs",
+  "note": "随安装包内置，无需用户 npm 安装；保留 MIT 授权；可选原生加速模块未捆绑。"
+}

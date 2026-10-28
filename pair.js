@@ -1,0 +1,8 @@
+const $=id=>document.getElementById(id),ticket=new URLSearchParams(location.search).get('ticket');history.replaceState(null,'','/pair');let approved=false,ended=false;
+async function request(name,body={}){const r=await fetch('/pair/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket,...body})});if(!r.ok)throw Error('申请已结束、过期或不合法。');return r.json();}
+async function refresh(){if(ended)return;try{const d=await request('code');$('origin').textContent=d.origin;if(approved){$('code').textContent=d.code;$('countdown').textContent=`${Math.max(0,Math.ceil((d.codeExpiresAt-Date.now())/1000))} 秒后更换`;}}catch(e){ended=true;$('approve').disabled=true;$('code').textContent='已结束';$('status').textContent='申请已完成或过期。已授予的权限可在控制台查看、撤销。';}}
+$('approve').onclick=async()=>{try{const duration=$('duration').value,scopes=[...document.querySelectorAll('input[name="scope"]:checked')].map(e=>e.value);await request('approve',{duration:duration==='forever'?duration:duration==='custom'?Number($('minutes').value)*60:Number(duration),scopes});approved=true;$('approve').disabled=true;$('duration').disabled=true;for(const input of document.querySelectorAll('input'))input.disabled=true;$('code-section').hidden=false;await refresh();}catch(e){$('status').textContent=e.message;}};
+$('cancel').onclick=async()=>{await request('cancel').catch(()=>{});ended=true;$('code').textContent='已取消';$('approve').disabled=true;$('status').textContent='已取消尚未完成的申请。已发放授权需要从控制台撤销。';};
+void refresh();setInterval(()=>void refresh(),1000);
+
+$('duration').onchange=()=>{$('custom-duration').hidden=$('duration').value!=='custom';};

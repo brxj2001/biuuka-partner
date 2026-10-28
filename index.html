@@ -1,0 +1,16 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/brand.svg" type="image/svg+xml"><title>Biuuka</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head><body><main>
+<p class="eyebrow">BIUUKA · LOCAL SERVICE</p><h1>Biuuka</h1>
+<p>使用本机 Codex 的 ChatGPT 登录状态。测试内容发送给 OpenAI，不经过 Biuuka 平台服务器。每次测试会消耗账户额度。</p>
+<p id="status" role="status">正在连接本机服务…</p>
+<button id="reload">刷新账户 / 额度 / 模型</button>
+<section aria-labelledby="account-heading"><h2 id="account-heading">本机账户</h2><p id="account">尚未读取</p><div id="limits"></div><p class="muted" id="account-time"></p></section>
+<div class="selectors"><label>模型<select id="model" disabled></select></label><label>推理等级<select id="effort" disabled></select></label></div>
+<section><h2>发起对话</h2><textarea id="custom-prompt" maxlength="16000" rows="5" placeholder="输入问题，使用当前模型与推理等级发送"></textarea><button id="send-chat" disabled>发送对话</button></section><h2>固定测试</h2>
+<p class="muted">点击按钮即使用当前模型和推理等级发送对应测试，每次测试单独保存一条 Codex 对话。</p>
+<div class="actions"><button id="run-pelican" disabled>鹈鹕测试</button><button id="run-candy" disabled>糖果测试</button><button id="stop" disabled>停止</button></div>
+<details><summary>查看两项完整提示词</summary><h3>鹈鹕测试</h3><p id="prompt-pelican"></p><h3>糖果测试</h3><p id="prompt-candy"></p></details>
+<h2>Codex 会话</h2><p id="thread">发送后显示会话 ID 和恢复方式。</p><p id="desktop-open"></p><pre id="resume" hidden></pre>
+<section><h2>已有测试对话</h2><p class="muted">只列出本助手创建的记录。点击在本机桌面端打开，不会重新发送测试。若打不开，请确认桌面端使用同一 Windows 用户与 Codex 配置。</p><div id="history-list"></div></section>
+<h2>测试结果</h2><pre id="answer" aria-live="polite"></pre>
+<p class="muted">账户信息仅在本机实时展示，不上传 Biuuka。测试对话保存到当前用户的 Codex 历史，可使用上方命令打开；不会创建 ChatGPT 普通聊天。桌面端需使用同一台电脑、同一 Codex 配置并刷新会话列表。模型名称来自 Codex 返回的模型目录，不代表已验证实际推理后端的身份。</p>
+</main></body></html>

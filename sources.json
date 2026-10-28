@@ -1,0 +1,90 @@
+{
+  "darwin-arm64": {
+    "node": {
+      "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz",
+      "algorithm": "sha256",
+      "digest": "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d",
+      "mirrors": [
+        "https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz"
+      ],
+      "cacheFile": "node-darwin-arm64.tar.gz"
+    },
+    "codex": {
+      "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.163.0-darwin-arm64.tgz",
+      "algorithm": "sha512",
+      "encoding": "base64",
+      "digest": "i7Dzk2a5aGmuGM9aNZgaUVTojZ/4bc5lRfosz++Y7X2BGhDkz+cySgbD+NYS1pOxfm0VEbLi9PZ3pAulI4kchw==",
+      "mirrors": [
+        "https://registry.npmmirror.com/@openai/codex/-/codex-0.163.0-darwin-arm64.tgz"
+      ],
+      "cacheFile": "codex-darwin-arm64.tgz"
+    },
+    "binary": "vendor/aarch64-apple-darwin/bin/codex"
+  },
+  "darwin-x64": {
+    "node": {
+      "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-x64.tar.gz",
+      "algorithm": "sha256",
+      "digest": "d1b5e999db158c62fe8f7267a4476b035d8bd93b1a605bac24a3f0dd166e3316",
+      "mirrors": [
+        "https://npmmirror.com/mirrors/node/v24.19.0/node-v24.19.0-darwin-x64.tar.gz"
+      ],
+      "cacheFile": "node-darwin-x64.tar.gz"
+    },
+    "codex": {
+      "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.163.0-darwin-x64.tgz",
+      "algorithm": "sha512",
+      "encoding": "base64",
+      "digest": "Ioj7h+B1ME9ZU1PH1ATfvFV5DiototEpFFaSSbg3kfDifB9djhl5fcJ++g5mpcL/+uVbcnReei+RiSXEx8o+kw==",
+      "mirrors": [
+        "https://registry.npmmirror.com/@openai/codex/-/codex-0.163.0-darwin-x64.tgz"
+      ],
+      "cacheFile": "codex-darwin-x64.tgz"
+    },
+    "binary": "vendor/x86_64-apple-darwin/bin/codex"
+  },
+  "win32-arm64": {
+    "node": {
+      "url": "https://nodejs.org/dist/v24.19.0/win-arm64/node.exe",
+      "algorithm": "sha256",
+      "digest": "3958e4bb3f2d4ef37c938215dfc65a9d3c9d839b5060fec103bd2345fa78e951",
+      "mirrors": [
+        "https://npmmirror.com/mirrors/node/v24.19.0/win-arm64/node.exe"
+      ],
+      "cacheFile": "node-win32-arm64.exe"
+    },
+    "codex": {
+      "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.163.0-win32-arm64.tgz",
+      "algorithm": "sha512",
+      "encoding": "base64",
+      "digest": "QnLn3gR2dExcdTThE/HAo5BrUq0/C8zDGQ0UZL3hNzfqt9ZklT6jGTyt8JhDyNZX4uSB4HhcJtbcOWucZGC0VQ==",
+      "mirrors": [
+        "https://registry.npmmirror.com/@openai/codex/-/codex-0.163.0-win32-arm64.tgz"
+      ],
+      "cacheFile": "codex-win32-arm64.tgz"
+    },
+    "binary": "vendor/aarch64-pc-windows-msvc/bin/codex.exe"
+  },
+  "win32-x64": {
+    "node": {
+      "url": "https://nodejs.org/dist/v24.19.0/win-x64/node.exe",
+      "algorithm": "sha256",
+      "digest": "3602f2bb1a10f2cbab4c36886218a33c1ab3db87290e73b033c46c77147d0237",
+      "mirrors": [
+        "https://npmmirror.com/mirrors/node/v24.19.0/win-x64/node.exe"
+      ],
+      "cacheFile": "node-win32-x64.exe"
+    },
+    "codex": {
+      "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.163.0-win32-x64.tgz",
+      "algorithm": "sha512",
+      "encoding": "base64",
+      "digest": "QQGQ/q9dCJ5C5jqhgFrwycpWG3szIyFNThMiKl6hYtu6N/eM3Qd7StesgnCFAfzVED8IkE3N3oH71szzcludqw==",
+      "mirrors": [
+        "https://registry.npmmirror.com/@openai/codex/-/codex-0.163.0-win32-x64.tgz"
+      ],
+      "cacheFile": "codex-win32-x64.tgz"
+    },
+    "binary": "vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+  }
+}

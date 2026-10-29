@@ -1,7 +1,6 @@
 param([ValidateSet('inspect','stop','start','session')][string]$Action,[string]$Descriptor)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
-[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
 $session=(Get-Process -Id $PID).SessionId
 # Filter at the CIM provider, retaining all processes in this user session so
 # intermediate parent relationships and unreadable owned processes stay visible.
@@ -280,18 +279,19 @@ return @{}
 try {
  Add-Type -Path (Join-Path $PSScriptRoot 'desktop-window.cs')
  if($Action -eq 'session'){
-  while($null -ne ($line=[Console]::ReadLine())){
+  $reader=New-Object IO.StreamReader([Console]::OpenStandardInput(),(New-Object Text.UTF8Encoding($false)),$true)
+  while($null -ne ($line=$reader.ReadLine())){
    $request=$null
    try {
     if($line.Length -gt 65536){throw 'desktop_identity_unconfirmed'}
     $request=$line | ConvertFrom-Json
     if($request.action -notin @('inspect','stop','start')){throw 'desktop_identity_unconfirmed'}
     $result=Invoke-DesktopAction $request.action $request.descriptor
-    @{id=$request.id;result=$result} | ConvertTo-Json -Compress -Depth 8
+    [Console]::WriteLine((@{id=$request.id;result=$result} | ConvertTo-Json -Compress -Depth 8))
    }catch{
     $code=$_.Exception.Message
     if($code -notin @('desktop_ambiguous','desktop_identity_unconfirmed','desktop_stop_failed','desktop_start_failed','desktop_window_unavailable')){$code='desktop_'+$request.action+'_failed'}
-    @{id=$request.id;error=$code} | ConvertTo-Json -Compress
+    [Console]::WriteLine((@{id=$request.id;error=$code} | ConvertTo-Json -Compress))
    }
   }
  }else{
@@ -299,4 +299,4 @@ try {
   $result=Invoke-DesktopAction $Action $d
   ConvertTo-Json -InputObject $result -Compress -Depth 8
  }
-}finally{foreach($handle in $script:verifiedFiles.Values){$handle.Dispose()}}
+}finally{if($reader){$reader.Dispose()};foreach($handle in $script:verifiedFiles.Values){$handle.Dispose()}}

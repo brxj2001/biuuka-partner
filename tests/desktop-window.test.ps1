@@ -30,6 +30,6 @@ try {
  if(!$process.WaitForExit(20000)){throw 'Native controller did not exit on EOF'}
  if($process.ExitCode -ne 0){throw 'Native controller failed'}
  $responses=@($output.Result.Trim() -split "`n" | ForEach-Object {$_ | ConvertFrom-Json})
- if($responses.Count -ne 2 -or $responses[0].id -ne 1 -or $responses[1].id -ne 2 -or $responses[1].error -ne 'desktop_identity_unconfirmed'){throw 'Persistent protocol failed'}
+ if($responses.Count -ne 2 -or $responses[0].id -ne 1 -or $responses[1].id -ne 2 -or $responses[1].error -ne 'desktop_identity_unconfirmed'){throw ('Persistent protocol failed for fixture requests: '+$output.Result+' stderr: '+$diagnostics.Result)}
  Write-Host 'Persistent PowerShell protocol, fixed action restrictions and EOF cleanup passed.'
 }finally{if(!$process.HasExited){$process.Kill();$process.WaitForExit()};$process.Dispose()}

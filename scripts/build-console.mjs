@@ -25,7 +25,7 @@ export function buildConsole(){return flight??=(async()=>{
  const licenses=[];
  for(const name of ['next','react','react-dom','lucide-react','scheduler','styled-jsx','tslib']){
   const dir=path.join(root,'node_modules',name);let license;
-  for(const file of ['LICENSE','LICENSE.md','LICENSE.txt','LICENSE-MIT','CopyrightNotice.txt']){try{license=await readFile(path.join(dir,file),'utf8');break;}catch{}}
+  for(const file of (await readdir(dir)).filter(n=>/^(license(?:\.md|\.txt|-mit)?|copyrightnotice\.txt)$/i.test(n)).sort()){try{license=await readFile(path.join(dir,file),'utf8');break;}catch{}}
   if(!license)throw Error('Missing bundled dependency license: '+name);
   licenses.push(name+'\n'+license);
  }

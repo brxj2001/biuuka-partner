@@ -6,8 +6,9 @@ import { deflateRawSync, crc32 } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 const here = path.dirname(fileURLToPath(import.meta.url));
-const runtimeFiles = ['release.mjs','release.json','desktop-switch.mjs','desktop-switch.ps1','desktop-switch-macos.js','accounts.mjs','tray-control.mjs','local-profile.mjs','uninstall.mjs','uninstall-windows.ps1','chatgpt-install.mjs','chatgpt-install.ps1','brand.svg','brand.png','brand.ico','merchant.mjs','subscription.mjs','version.mjs','tray.mjs','tray-macos.js','tray-windows.ps1','live.mjs','ports.mjs','ws.cjs','WS-LICENSE','WS-SOURCE.json','access.mjs','control.mjs','console.html','console-assets.json','pair.html','external-sdk.js','network.mjs','offline.mjs','state.mjs','records.mjs','update.mjs','supervisor.mjs','launcher.mjs','LICENSE','Service.cs','app.js','bridge.mjs','cli.mjs','index.html','mac-service.mjs','pair.js','run.ps1','runtime.mjs','server.mjs','setup.mjs','sources.json','style.css','windows.ps1'];
+const runtimeFiles = ['release.mjs','release.json','desktop-switch.mjs','desktop-switch.ps1','desktop-window.cs','desktop-switch-macos.js','accounts.mjs','tray-control.mjs','local-profile.mjs','uninstall.mjs','uninstall-windows.ps1','chatgpt-install.mjs','chatgpt-install.ps1','brand.svg','brand.png','brand.ico','merchant.mjs','subscription.mjs','version.mjs','tray.mjs','tray-macos.js','tray-windows.ps1','live.mjs','ports.mjs','ws.cjs','WS-LICENSE','WS-SOURCE.json','access.mjs','control.mjs','console.html','console-assets.json','pair.html','external-sdk.js','network.mjs','offline.mjs','state.mjs','records.mjs','update.mjs','supervisor.mjs','launcher.mjs','LICENSE','Service.cs','app.js','bridge.mjs','cli.mjs','index.html','mac-service.mjs','pair.js','run.ps1','runtime.mjs','server.mjs','setup.mjs','sources.json','style.css','windows.ps1'];
 export const sourceFiles = {
+  "desktop-window.cs": "chatgpt/desktop-window.cs",
   "accounts.mjs": "chatgpt/accounts.mjs",
   "bridge.mjs": "chatgpt/bridge.mjs",
   "records.mjs": "chatgpt/records.mjs",

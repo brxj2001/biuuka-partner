@@ -12,6 +12,15 @@ try{
  $gui=Join-Path $root 'desktop/ChatGPT.exe';$other=Join-Path $root 'other/ChatGPT.exe';$chat=Join-Path $root 'chat/ChatGPT.exe'
  foreach($dir in @('desktop/resources','other/resources','chat')){New-Item -ItemType Directory -Path (Join-Path $root $dir) -Force | Out-Null}
  foreach($file in @($gui,$other,$chat,(Join-Path $root 'desktop/resources/codex.exe'),(Join-Path $root 'other/resources/codex.exe'))){[IO.File]::WriteAllText($file,'fixture')}
+ $script:verifiedFiles=@{};$script:signatureChecks=0
+ function Get-AuthenticodeSignature {param($LiteralPath) $script:signatureChecks++;[pscustomobject]@{Status='Valid';SignerCertificate=[pscustomobject]@{Subject='CN=OpenAI fixture'}}}
+ ValidateExe $gui;ValidateExe $gui
+ if($script:signatureChecks -ne 1){throw 'Signature rechecked within locked transaction'}
+ $writeBlocked=$false
+ try{$unexpected=[IO.File]::Open($gui,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::Read);$unexpected.Dispose()}catch{$writeBlocked=$true}
+ if($env:OS -eq 'Windows_NT' -and !$writeBlocked){throw 'Verified executable was not protected against writes'};$count++
+ foreach($handle in $script:verifiedFiles.Values){$handle.Dispose()};$script:verifiedFiles=@{}
+ Remove-Item Function:Get-AuthenticodeSignature
  $cli=Join-Path $root 'desktop/resources/codex.exe';$biuuka=Join-Path $root 'biuuka/codex.exe'
  $background=@((Proc $cli 'codex.exe' 'app-server'),(Proc $biuuka 'codex.exe' 'app-server'))
  $selected=Select-CodexDesktop (@((Proc $gui),(Proc $gui 'ChatGPT.exe' '--type=renderer'))+$background) @() 1
@@ -96,11 +105,13 @@ try{
  $started.CommandLine='"'+$gui+'"'
  # Exercise dispatch once and stable-main confirmation without launching a GUI.
  function Get-AppxPackage {param($ErrorAction,$Name) @()}
+ function Get-DesktopWindowState($Candidate){return 'foreground'}
  function Start-Sleep {param($Milliseconds)}
  $script:launchCount=0;$script:live=@()
  function Get-CimInstance {param($ClassName,$Filter,$Property) $script:live}
  function Invoke-DesktopLaunch {param($Exe,$AppId) $script:launchCount++;$script:live=@($started)}
- Start-DesktopRuntime $gui 1 2000
+ $result=Start-DesktopRuntime $gui 1 2000
+ if($result.window -ne 'foreground'){throw 'Window result lost'}
  if($script:launchCount -ne 1){throw 'Launch dispatched more than once'};$count++
  Reject {Start-DesktopRuntime $gui 1 20} 'desktop_start_failed'
  if($script:launchCount -ne 1){throw 'Residual GUI caused duplicate launch'};$count++
@@ -108,7 +119,15 @@ try{
  function Invoke-DesktopLaunch {param($Exe,$AppId) $script:launchCount++;$script:live=@($startedHelper)}
  Reject {Start-DesktopRuntime $gui 1 20} 'desktop_start_failed'
  if($script:launchCount -ne 2){throw 'Uncertain launch retried'};$count++
- Remove-Item Function:Get-AppxPackage,Function:Start-Sleep,Function:Get-CimInstance,Function:Invoke-DesktopLaunch
+ $script:live=@()
+ function Invoke-DesktopLaunch {param($Exe,$AppId) $script:launchCount++;$script:live=@($started)}
+ function Get-DesktopWindowState($Candidate){return 'pending'}
+ Reject {Start-DesktopRuntime $gui 1 20} 'desktop_window_unavailable';$count++
+ $script:live=@()
+ function Get-DesktopWindowState($Candidate){return 'background'}
+ $watch=[Diagnostics.Stopwatch]::StartNew();$result=Start-DesktopRuntime $gui 1 500
+ if($result.window -ne 'background' -or $watch.ElapsedMilliseconds -ge 500){throw 'Background window falsely reported or fixed stability delay retained'};$count++
+ Remove-Item Function:Get-AppxPackage,Function:Start-Sleep,Function:Get-CimInstance,Function:Invoke-DesktopLaunch,Function:Get-DesktopWindowState
  # Run the actual stop loop against snapshots, without controlling real processes.
  $script:live=@($main,$helper,$server,$unrelated,$otherSession)
  $script:events=New-Object 'System.Collections.Generic.List[string]'
@@ -117,6 +136,7 @@ try{
  function Invoke-DesktopExit($Item,[bool]$Force){
   $script:events.Add(([string]$Force)+':'+$Item.ProcessId)
   if($Force){$script:live=@($script:live | Where-Object {$_.ProcessId -ne $Item.ProcessId})}
+  return $true
  }
  Stop-DesktopRuntime $gui 1 0 500
  if(($script:events -join ',') -ne 'False:100,False:101,False:102,True:100,True:101,True:102'){throw 'Graceful/force ordering failed'}
@@ -130,6 +150,13 @@ try{
  $script:live=@($main,$helper,$server)
  function Invoke-DesktopExit($Item,[bool]$Force){}
  Reject {Stop-DesktopRuntime $gui 1 0 20} 'desktop_stop_failed';$count++
+ $script:live=@($main,$helper,$server);$watch=[Diagnostics.Stopwatch]::StartNew()
+ function Invoke-DesktopExit($Item,[bool]$Force){
+  if($Item.ProcessId -eq 100 -or $Force){$script:live=@($script:live | Where-Object {$_.ProcessId -ne $Item.ProcessId})}
+  return $Item.ProcessId -eq 100
+ }
+ Stop-DesktopRuntime $gui 1 2000 500
+ if($watch.ElapsedMilliseconds -ge 500){throw 'Exited GUI still paid grace delay'};$count++
  # An unowned orphan using the same bundled runtime blocks the auth write but
  # must never be killed merely because its executable matches.
  $script:live=@($outside)
@@ -153,5 +180,5 @@ try{
  Invoke-DesktopExit $main $true
  if($script:killCount -ne 1){throw 'Changed executable terminated'};$count++
  Remove-Item Function:Get-Process
-}finally{$env:APPDATA=$prior;Remove-Item -LiteralPath $root -Recurse -Force}
+}finally{foreach($handle in $script:verifiedFiles.Values){$handle.Dispose()};$env:APPDATA=$prior;Remove-Item -LiteralPath $root -Recurse -Force}
 Write-Host "$count desktop selection and profile checks passed (isolated fixtures, no real processes controlled)."

@@ -26,6 +26,9 @@ jobs:
       - name: 检查 PowerShell 安装与托盘脚本
         shell: pwsh
         run: ./tests/windows.test.ps1
+      - name: 验证原生窗口恢复与持久控制协议（隔离窗口）
+        shell: powershell
+        run: ./tests/desktop-window.test.ps1
       - name: 编译 Windows 原生服务宿主
         shell: powershell
         run: |

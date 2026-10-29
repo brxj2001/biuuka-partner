@@ -1,6 +1,7 @@
-param([ValidateSet('inspect','stop','start')][string]$Action,[string]$Descriptor)
+param([ValidateSet('inspect','stop','start','session')][string]$Action,[string]$Descriptor)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
+[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
 $session=(Get-Process -Id $PID).SessionId
 # Filter at the CIM provider, retaining all processes in this user session so
 # intermediate parent relationships and unreadable owned processes stay visible.
@@ -13,10 +14,17 @@ function Get-DesktopLaunchSnapshot([int]$SessionId) {
 function Matches($exe) {
  @(Get-CimInstance Win32_Process | Where-Object { $_.SessionId -eq $session -and $_.ExecutablePath -and $_.ExecutablePath.Equals($exe,[StringComparison]::OrdinalIgnoreCase) })
 }
+$script:verifiedFiles=@{}
 function ValidateExe($exe) {
  if(-not [IO.Path]::IsPathRooted($exe) -or [IO.Path]::GetFileName($exe) -notin @('ChatGPT.exe','Codex.exe')){throw 'desktop_identity_unconfirmed'}
+ if($script:verifiedFiles.ContainsKey($exe)){return}
+ # Keep the verified file open without write/delete sharing for this transaction.
+ $handle=[IO.File]::Open($exe,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+ try {
  $sig=Get-AuthenticodeSignature -LiteralPath $exe
  if($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch '(?i)\bOpenAI\b'){throw 'desktop_identity_unconfirmed'}
+ $script:verifiedFiles[$exe]=$handle
+ }catch{$handle.Dispose();throw}
 }
 # Codex's Windows GUI is ChatGPT.exe; codex.exe is its CLI/app-server.
 # Never count the bundled or Biuuka-owned app-server as another desktop.
@@ -126,14 +134,15 @@ function Invoke-DesktopExit($Item,[bool]$Force) {
   $actual=$process.StartTime.ToUniversalTime().Ticks
   $expected=([datetime]$Item.CreationDate).ToUniversalTime().Ticks
   if(($actual-($actual % 10000)) -ne ($expected-($expected % 10000)) -or $process.SessionId -ne $Item.SessionId -or $process.MainModule.FileName -ine $Item.ExecutablePath){return}
-  if($Force){$process.Kill()}elseif($process.MainWindowHandle -ne 0){$null=$process.CloseMainWindow()}
+  if($Force){$process.Kill();return $true}elseif($process.MainWindowHandle -ne 0){return $process.CloseMainWindow()}
+  return $false
  }catch{if(-not $process.HasExited){throw 'desktop_stop_failed'}}finally{$process.Dispose()}
 }
-function Stop-DesktopRuntime([string]$Exe,[int]$SessionId,[int]$GraceMs=5000,[int]$TimeoutMs=20000) {
+function Stop-DesktopRuntime([string]$Exe,[int]$SessionId,[int]$GraceMs=2000,[int]$TimeoutMs=20000) {
  $watch=[Diagnostics.Stopwatch]::StartNew()
  $snapshot=@(Get-DesktopSnapshot $SessionId)
  $owned=@(Select-DesktopOwned $snapshot $Exe $SessionId)
- foreach($item in $owned){Invoke-DesktopExit $item $false}
+ $graceful=@($owned | Where-Object {Invoke-DesktopExit $_ $false})
  while($true){
   $snapshot=@(Get-DesktopSnapshot $SessionId)
   # Include children created during graceful shutdown, but not unrelated new roots.
@@ -145,11 +154,11 @@ function Stop-DesktopRuntime([string]$Exe,[int]$SessionId,[int]$GraceMs=5000,[in
   $runtimeRemaining=@($snapshot | Where-Object {$_.SessionId -eq $SessionId -and $_.ExecutablePath -ieq $runtime})
   if(-not $remaining.Count -and -not $guiRemaining.Count -and -not $runtimeRemaining.Count){return}
   if($watch.ElapsedMilliseconds -ge $TimeoutMs){throw 'desktop_stop_failed'}
-  if($watch.ElapsedMilliseconds -ge $GraceMs){
+  if(-not @(Get-DesktopRemaining $graceful $snapshot).Count -or $watch.ElapsedMilliseconds -ge $GraceMs){
    # Kill only pinned, revalidated identities. No taskkill /IM or recursive /T.
-   foreach($item in $remaining){Invoke-DesktopExit $item $true}
+   foreach($item in $remaining){$null=Invoke-DesktopExit $item $true}
   }
-  Start-Sleep -Milliseconds 250
+  Start-Sleep -Milliseconds 100
  }
 }
 # Resolve the actual manifest Application Id; never guess !App or fall back to
@@ -207,27 +216,39 @@ function Select-DesktopStarted($Snapshot,[string]$Exe,[int]$SessionId,$Before,[d
   return -not @($arguments | Select-Object -Skip 1 | Where-Object {$_ -match '^--type(?:=|$)'}).Count
  })
 }
+function Get-DesktopWindowState($Candidate) {
+ $process=Get-Process -Id $Candidate.ProcessId -ErrorAction SilentlyContinue
+ if(-not $process){return 'pending'}
+ try {
+  $null=$process.Handle
+  $actual=$process.StartTime.ToUniversalTime().Ticks
+  $expected=([datetime]$Candidate.CreationDate).ToUniversalTime().Ticks
+  if(($actual-($actual % 10000)) -ne ($expected-($expected % 10000)) -or $process.SessionId -ne $Candidate.SessionId -or $process.MainModule.FileName -ine $Candidate.ExecutablePath){throw 'desktop_identity_unconfirmed'}
+  $hwnd=[BiuukaDesktopWindow]::Find([uint32]$Candidate.ProcessId)
+  return [BiuukaDesktopWindow]::Present([uint32]$Candidate.ProcessId,$hwnd)
+ }finally{$process.Dispose()}
+}
 function Start-DesktopRuntime([string]$Exe,[int]$SessionId,[int]$TimeoutMs=15000) {
  $before=@(Get-DesktopLaunchSnapshot $SessionId)
- # A residual GUI is not a successful restart. Leave it alone and report failure.
  if(@($before | Where-Object {$_.SessionId -eq $SessionId -and $_.ExecutablePath -ieq $Exe}).Count){throw 'desktop_start_failed'}
  $appId=Find-DesktopPackage $Exe @(Get-AppxPackage -Name OpenAI.* -ErrorAction Stop)
  $notBefore=[DateTime]::UtcNow.AddSeconds(-1)
- $watch=[Diagnostics.Stopwatch]::StartNew();$stable=$null;$stableSince=0
+ $watch=[Diagnostics.Stopwatch]::StartNew();$seen=$false
  Invoke-DesktopLaunch $Exe $appId
  while($watch.ElapsedMilliseconds -lt $TimeoutMs){
   $candidates=@(Select-DesktopStarted @(Get-DesktopLaunchSnapshot $SessionId) $Exe $SessionId $before $notBefore)
   if($candidates.Count -gt 1){throw 'desktop_ambiguous'}
   if($candidates.Count -eq 1){
-   $candidate=$candidates[0]
-   if($stable -and $stable.ProcessId -eq $candidate.ProcessId -and $stable.CreationDate -eq $candidate.CreationDate){
-    if($watch.ElapsedMilliseconds-$stableSince -ge 1000){return}
-   }else{$stable=$candidate;$stableSince=$watch.ElapsedMilliseconds}
-  }else{$stable=$null}
-  Start-Sleep -Milliseconds 250
+   $seen=$true
+   $window=Get-DesktopWindowState $candidates[0]
+   if($window -in @('foreground','background')){return @{window=$window}}
+  }
+  Start-Sleep -Milliseconds 100
  }
+ if($seen){throw 'desktop_window_unavailable'}
  throw 'desktop_start_failed'
 }
+function Invoke-DesktopAction([string]$Action,$Descriptor) {
 if($Action -eq 'inspect') {
  $processes=@(Get-DesktopSnapshot $session)
  # Prefer the running GUI. Only enumerate installed packages when none is running.
@@ -241,16 +262,41 @@ if($Action -eq 'inspect') {
   })
   $selected=Select-CodexDesktop $processes $installed $session
  }
- if(-not $selected){'null';exit}
+ if(-not $selected){return $null}
  ValidateExe $selected.exe
- $selected | ConvertTo-Json -Compress;exit
+ return $selected
 }
-$d=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Descriptor)) | ConvertFrom-Json
+$d=$Descriptor
 $exe=$d.exe;ValidateExe $exe
 if(-not (Test-CodexGui $exe)){throw 'desktop_identity_unconfirmed'}
 if($Action -eq 'stop') {
  Stop-DesktopRuntime $exe $session
 } else {
- Start-DesktopRuntime $exe $session
+ return Start-DesktopRuntime $exe $session
 }
-'{}'
+return @{}
+}
+
+try {
+ Add-Type -Path (Join-Path $PSScriptRoot 'desktop-window.cs')
+ if($Action -eq 'session'){
+  while($null -ne ($line=[Console]::ReadLine())){
+   $request=$null
+   try {
+    if($line.Length -gt 65536){throw 'desktop_identity_unconfirmed'}
+    $request=$line | ConvertFrom-Json
+    if($request.action -notin @('inspect','stop','start')){throw 'desktop_identity_unconfirmed'}
+    $result=Invoke-DesktopAction $request.action $request.descriptor
+    @{id=$request.id;result=$result} | ConvertTo-Json -Compress -Depth 8
+   }catch{
+    $code=$_.Exception.Message
+    if($code -notin @('desktop_ambiguous','desktop_identity_unconfirmed','desktop_stop_failed','desktop_start_failed','desktop_window_unavailable')){$code='desktop_'+$request.action+'_failed'}
+    @{id=$request.id;error=$code} | ConvertTo-Json -Compress
+   }
+  }
+ }else{
+  $d=if($Descriptor){[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Descriptor)) | ConvertFrom-Json}else{$null}
+  $result=Invoke-DesktopAction $Action $d
+  ConvertTo-Json -InputObject $result -Compress -Depth 8
+ }
+}finally{foreach($handle in $script:verifiedFiles.Values){$handle.Dispose()}}

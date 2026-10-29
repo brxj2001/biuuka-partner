@@ -71,7 +71,7 @@ test('failed native verification restores old login before reopening original de
 test('switch waits for verification bridge exit before desktop control and reopening',()=>{
  const events=[];
  const desktop={inspect:async()=>{events.push('inspect');return {running:true};},stop:async()=>events.push('stop'),start:async()=>events.push('start')};
- return fixture(async({accounts,file})=>{await accounts.importCurrent();await writeFile(file,credential('second'));await accounts.switchTo(identity(credential('first')).id);assert.deepEqual(events,['bridge-exited','inspect','stop','bridge-exited','start']);},{desktop,onBridgeClose:async()=>{await new Promise(resolve=>setTimeout(resolve,5));events.push('bridge-exited');}});
+ return fixture(async({accounts,file})=>{await accounts.importCurrent();await writeFile(file,credential('second'));await accounts.switchTo(identity(credential('first')).id);assert.deepEqual(events,['inspect','bridge-exited','stop','bridge-exited','start']);},{desktop,onBridgeClose:async()=>{await new Promise(resolve=>setTimeout(resolve,5));events.push('bridge-exited');}});
 });
 
 test('successive switches and same-account retry do not force refresh valid saved credentials',()=>{
@@ -113,3 +113,12 @@ test('switch timing is local, private and contains no identity or credential',()
  await accounts.importCurrent();await accounts.switchTo(identity(credential('first')).id);const file=path.join(state,'switch-timing.json'),raw=await readFile(file,'utf8'),timing=JSON.parse(raw);
  assert.equal(timing.success,true);assert.ok(timing.totalMs>=0);assert.ok(timing.stages.some(s=>s.stage==='verify_current'));assert.doesNotMatch(raw,/secret|example|account_id|auth.json/);if(process.platform!=='win32')assert.equal((await stat(file)).mode&0o777,0o600);
 }));
+
+test('desktop resources close on preparation failure without closing the client',()=>{
+ let closed=0,stopped=0;const desktop={inspect:async()=>{await new Promise(r=>setTimeout(r,15));return {};},stop:async()=>stopped++,close:async()=>closed++};
+ return fixture(async({accounts,setFail})=>{await accounts.importCurrent();setFail(true);await assert.rejects(accounts.switchTo(identity(credential('first')).id));assert.equal(closed,1);assert.equal(stopped,0);},{desktop});
+});
+test('foreground restriction reports background without rolling back or restarting twice',()=>{
+ let starts=0,closed=0;const desktop={inspect:async()=>({running:true}),stop:async()=>{},start:async()=>{starts++;return {window:'background'};},close:async()=>closed++};
+ return fixture(async({accounts,file})=>{await accounts.importCurrent();await writeFile(file,credential('second'));const result=await accounts.switchTo(identity(credential('first')).id);assert.equal(result.desktop,'background');assert.equal(starts,1);assert.equal(closed,1);assert.equal(identity(await readFile(file,'utf8')).email,'first@example.test');},{desktop});
+});

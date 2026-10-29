@@ -64,7 +64,12 @@ export function createAccounts({state,codexHome,bridgeFactory,online=()=>true,op
   try{
   requireOnline();await load(id);switchResult=null;mark('save_current');
   let previous=await native();if(previous)await save(previous);
-  mark('verify_account');let prepared=await verify(id,!!previous&&identity(previous).id===id);mark('inspect_desktop');const client=await desktop?.inspect();
+  mark('prepare_target');
+  // Read-only desktop preparation overlaps target auth verification. Settle both
+  // before cleanup so a failed verification cannot leave a late native session.
+  const preparation=await Promise.allSettled([verify(id,!!previous&&identity(previous).id===id),desktop?.inspect()]);
+  for(const result of preparation)if(result.status==='rejected')throw result.reason;
+  let prepared=preparation[0].value;const client=preparation[1].value;
   let stopped=false,written=false,next;
   try{
    requireOnline();mark('stop_desktop');await desktop?.stop(client);stopped=true;
@@ -80,11 +85,11 @@ export function createAccounts({state,codexHome,bridgeFactory,online=()=>true,op
    if(stopped&&client?.running){mark('restore_desktop');try{await desktop.start(client);}catch{switchResult={id,status:'restore_failed'};fail('desktop_restore_failed');}}
    if(written)fail('switch_verification_failed');throw error;
   }
-  mark('start_desktop');
-  try{await desktop?.start(client);const observed=await native();if(!observed||identity(observed).id!==id)fail('account_changed');}catch{switchResult={id,status:'start_failed'};fail('desktop_start_failed');}
-  switchResult={id,status:client?'restarted':'cli_only'};
+  mark('start_desktop');let presentation;
+  try{presentation=await desktop?.start(client);const observed=await native();if(!observed||identity(observed).id!==id)fail('account_changed');}catch(error){switchResult={id,status:error.code==='desktop_window_unavailable'?'window_unavailable':'start_failed'};fail(error.code==='desktop_window_unavailable'?'desktop_window_unavailable':'desktop_start_failed');}
+  switchResult={id,status:client?(presentation?.window==='background'?'background':'restarted'):'cli_only'};
   success=true;return {switched:true,desktop:switchResult.status};
-  }finally{mark('finished');await write(path.join(state,'switch-timing.json'),JSON.stringify({checkedAt:new Date().toISOString(),success,totalMs:Math.round(performance.now()-started),stages})).catch(()=>{});}
+  }finally{try{await desktop?.close?.();}catch(e){success=false;throw e;}finally{mark('finished');await write(path.join(state,'switch-timing.json'),JSON.stringify({checkedAt:new Date().toISOString(),success,totalMs:Math.round(performance.now()-started),stages,desktopStages:desktop?.timings?.()||[]})).catch(()=>{});}}
  });}
  async function renameAccount(id,name){return exclusive(async()=>{await load(id);if(typeof name!=='string'||name.length>60||/[\x00-\x1f]/.test(name))fail('invalid_name');const m=JSON.parse(await read(metadata(id))||'{}');await write(metadata(id),JSON.stringify({...m,name:name.trim()}));return {renamed:true};});}
  async function remove(id){return exclusive(async()=>{await load(id);const current=await native();if(current&&identity(current).id===id)fail('current_account');await rm(home(id),{recursive:true,force:true});return {removed:true};});}

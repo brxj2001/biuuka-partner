@@ -14,11 +14,13 @@ import { createAccess, trustedOrigin, validOrigin } from './access.mjs';
 export {VERSION} from '../release.mjs';
 export const TRUSTED_SITES = {has:trustedOrigin};
 const resources = {
-"console.html":new URL("../web/console/console.html",import.meta.url),"console.css":new URL("../web/console/console.css",import.meta.url),"console.js":new URL("../web/console/console.js",import.meta.url),"pair.html":new URL("../web/console/pair.html",import.meta.url),"pair.js":new URL("../web/console/pair.js",import.meta.url),"external-sdk.js":new URL("../web/console/external-sdk.js",import.meta.url),"index.html":new URL("../web/test/index.html",import.meta.url),"style.css":new URL("../web/test/style.css",import.meta.url),"app.js":new URL("../web/test/app.js",import.meta.url),"brand.svg":new URL("../assets/brand.svg",import.meta.url),"brand.png":new URL("../assets/brand.png",import.meta.url),"brand.ico":new URL("../assets/brand.ico",import.meta.url)
+"console.html":new URL("../web/console/generated/console.html",import.meta.url),"console-assets.json":new URL("../web/console/generated/console-assets.json",import.meta.url),"pair.html":new URL("../web/console/pair.html",import.meta.url),"pair.js":new URL("../web/console/pair.js",import.meta.url),"external-sdk.js":new URL("../web/console/external-sdk.js",import.meta.url),"index.html":new URL("../web/test/index.html",import.meta.url),"style.css":new URL("../web/test/style.css",import.meta.url),"app.js":new URL("../web/test/app.js",import.meta.url),"brand.svg":new URL("../assets/brand.svg",import.meta.url),"brand.png":new URL("../assets/brand.png",import.meta.url),"brand.ico":new URL("../assets/brand.ico",import.meta.url)
 };
 const directory = path.dirname(fileURLToPath(import.meta.url));
 export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 10000, records, localProfile, accounts, network = createNetwork(), control, chatgptInstall = createChatGPTDetector() }) {
   const uiInstance=randomBytes(12).toString('hex');
+  let consoleAssets;
+  const assets=()=>consoleAssets??=(readFile(resources['console-assets.json'],'utf8').then(JSON.parse).catch(e=>{consoleAssets=null;throw e;}));
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
   const access = control?.access || createAccess();
   const enabled=()=>control?.enabled()!==false;
@@ -28,9 +30,9 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
   const refreshNetwork=async(force=false)=>{if(!online())return null;const report=await network(force);networkReport=online()?report:null;live?.broadcast();return networkReport;};
   const refreshVersion=async()=>{if(control?.appUpdate){updateInfo=await control.appUpdate.status();live?.broadcast();}return updateInfo;};
   let draining = false, accountWaiting=false;
-  let busy = false, profile, profileError, profileFlight, profileBridge;
-  const refreshProfile = () => {
-    if(!enabled()||draining||accounts?.idle()===false)return Promise.resolve();
+  let busy = false, profile, profileError, profileFlight, profileBridge, cancelProfile, retiringProfile;
+  const refreshProfile = (requested=false) => {
+    if(!enabled()||draining||(busy&&!requested)||retiringProfile||accounts?.idle()===false)return Promise.resolve();
     if (profileFlight) return profileFlight;
     profileFlight = (async () => {
       let reader, deadline;
@@ -39,7 +41,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
         reader = profileBridge = bridgeFactory();
         profile = await Promise.race([
           (async () => { await reader.initialize(); return reader.profile(); })(),
-          new Promise((_, reject) => { deadline = setTimeout(() => reject(Object.assign(new Error('timeout'), {code:'timeout'})), 45000); })
+          new Promise((_, reject) => { cancelProfile=()=>reject(Object.assign(new Error('cancelled'),{code:'cancelled'})); deadline = setTimeout(() => reject(Object.assign(new Error('timeout'), {code:'timeout'})), 45000); })
         ]);
         if(!enabled())profile=null;
         else if(!online())profile=await localProfile?.read()||null;
@@ -47,7 +49,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
         profileError = null;
       }
       catch (error) { profile = enabled()?await localProfile?.read()||null:null; profileError = profile?null:error; }
-      finally { if(!enabled())profile=null;clearTimeout(deadline); reader?.close(); profileBridge = null; live?.broadcast(); }
+      finally { if(!enabled())profile=null;clearTimeout(deadline); cancelProfile=null; try{if(reader?.closeAndWait)await reader.closeAndWait();else reader?.close();}catch(e){retiringProfile=reader;throw e;}finally{profileBridge=null;} live?.broadcast(); }
     })().finally(() => { profileFlight = null; });
     return profileFlight;
   };
@@ -78,8 +80,9 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
     if(req.method==='GET'&&['/console','/pair'].includes(url.pathname)){
       if(requestOrigin&&requestOrigin!==origin||req.headers['sec-fetch-dest']==='iframe'||req.headers['sec-fetch-site']==='cross-site'&&req.headers['sec-fetch-mode']!=='navigate')return json(403,{error:'origin_rejected'});
       const name=url.pathname==='/console'?'console.html':'pair.html';
-      let body=await readFile(resources[name],'utf8');
-      if(name==='console.html')body=body.replace('__CONSOLE_TOKEN__',token);
+      let body;try{body=await readFile(resources[name],'utf8');
+      if(name==='console.html'){const manifest=await assets();const hashes=manifest.scriptHashes.filter(h=>/^'sha256-[A-Za-z0-9+/=]+'$/.test(h)).join(' ');res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'self' ${hashes}; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);body=body.replace('__CONSOLE_TOKEN__',token);}
+      }catch{return json(503,{error:'console_build_required'});}
       res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(body);return;
     }
     if(external){
@@ -128,7 +131,15 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
       if(external&&!website&&!access.permits(grantToken,requestOrigin,'account')&&!access.permits(grantToken,requestOrigin,'test'))return json(401,{error:'pairing_required'});
       return json(200,{service:'biuuka',uiInstance,version:VERSION,installed:true,engine:enabled()?'enabled':'disabled',networkEnabled:control?.settings?.().networkEnabled!==false,control:!!control,live:true,refreshMs});
     }
-    const files={'/brand.svg':['brand.svg','image/svg+xml'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript'],'/style.css':['style.css','text/css'],'/console.js':['console.js','text/javascript'],'/console.css':['console.css','text/css'],'/pair.js':['pair.js','text/javascript'],'/external-sdk.js':['external-sdk.js','text/javascript']};
+    if(req.method==='GET'&&url.pathname.startsWith('/_next/')&&!external){
+      try{const name=(await assets()).routes[url.pathname];
+        if(typeof name!=='string'||!/^console-[a-f0-9]{24}\.[a-z0-9]+$/.test(name))return json(404,{error:'not_found'});
+        const bytes=await readFile(new URL(name,resources['console.html']));
+        const type=name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'application/octet-stream';
+        res.writeHead(200,{'Content-Type':type});res.end(bytes);return;
+      }catch{return json(404,{error:'not_found'});}
+    }
+    const files={'/brand.svg':['brand.svg','image/svg+xml'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript'],'/style.css':['style.css','text/css'],'/pair.js':['pair.js','text/javascript'],'/external-sdk.js':['external-sdk.js','text/javascript']};
     if(req.method==='GET'&&files[req.url]&&!external){const [file,type]=files[req.url];res.writeHead(200,{'Content-Type':type});res.end(await readFile(resources[file]));return;}
     if(req.url.startsWith('/control/')){
       if(!master||!control)return json(403,{error:'control_required'});
@@ -143,12 +154,21 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
           if(busy||draining)return json(409,{error:'busy'});
           busy=true;
           try{
-            if(profileFlight){accountWaiting=true;try{await profileFlight;}finally{accountWaiting=false;}}
+            const waitStarted=performance.now();
+            if(profileFlight||retiringProfile){accountWaiting=true;const reader=retiringProfile||profileBridge,flight=profileFlight;retiringProfile=reader;try{
+              // User account operations preempt disposable quota polling. Keep the
+              // write barrier until the owning process has actually exited.
+              cancelProfile?.();
+              if(reader?.closeAndWait)await reader.closeAndWait();else reader?.close();
+              await flight;
+              retiringProfile=null;
+            }finally{accountWaiting=false;}}
+            const waitMs=Math.round(performance.now()-waitStarted);
             const result=await ({import:()=>accounts.importCurrent(),login:()=>accounts.startLogin(),refresh:()=>accounts.refresh(input.id),switch:()=>accounts.switchTo(input.id),rename:()=>accounts.rename(input.id,input.name),remove:()=>accounts.remove(input.id)})[action]();
-            if(action==='switch'){profile=null;profileError=null;live?.broadcast();void refreshProfile();}
-            return json(200,result);
+            if(action==='switch'){profile=null;profileError=null;live?.broadcast();}
+            return json(200,action==='switch'?{...result,backgroundWaitMs:waitMs}:result);
           }catch(e){if(action==='switch'){profile=null;profileError=null;live?.broadcast();}const allowed=['desktop_restore_failed','desktop_inspect_failed','desktop_stop_failed','desktop_start_failed','desktop_custom_home','desktop_ambiguous','desktop_identity_unconfirmed','target_login_unavailable','shutdown_unconfirmed','codex_request_failed','account_timeout','accounts_busy','network_disabled','credential_store_unsupported','chatgpt_login_required','invalid_account','invalid_name','current_account','account_changed','account_mismatch','switch_verification_failed','login_failed','unsafe_account_file'];return json(409,{error:allowed.includes(e.code)?e.code:'account_operation_failed'});}
-          finally{busy=false;}
+          finally{busy=false;if(action==='switch')void refreshProfile();}
         }
         if(req.url==='/control/boundary/ack'){if(input.version!==1)return json(400,{error:'invalid_request'});await control.save({boundaryVersion:1});return json(200,{acknowledged:true});}
         if(req.url==='/control/records')return json(200,{records:records?await records.list():[]});
@@ -214,7 +234,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
       if (res.destroyed) return;
       if (req.url === '/network') { json(200, await refreshNetwork()); return; }
       if (req.url === '/account' && (refreshMs > 0 || !online())) {
-        if (!online() || !profile || Date.now() - Date.parse(profile.checkedAt) >= refreshMs) await refreshProfile();
+        if (!online() || !profile || Date.now() - Date.parse(profile.checkedAt) >= refreshMs) await refreshProfile(true);
         if (profileError) throw profileError;
         json(200, profile); return;
       }
@@ -265,8 +285,8 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
     timer.unref();
   });
   const networkTimer=setInterval(()=>{void refreshNetwork(true).catch(()=>{});void refreshVersion().catch(()=>{});},300000);networkTimer.unref();
-  server.once('close', () => { void accounts?.close(); clearInterval(networkTimer);clearInterval(timer); profileBridge?.close(); profile = null; });
-  server.canPrepareUpdate=()=>!(busy||profileFlight||accounts?.idle()===false||control?.idle?.()===false);
+  server.once('close', () => { cancelProfile?.();void accounts?.close(); clearInterval(networkTimer);clearInterval(timer); profileBridge?.close(); profile = null; });
+  server.canPrepareUpdate=()=>!(busy||profileFlight||retiringProfile||accounts?.idle()===false||control?.idle?.()===false);
   server.prepareUpdate=()=>{if(!server.canPrepareUpdate())return false;draining=true;clearInterval(timer);return true;};
   return server;
 }

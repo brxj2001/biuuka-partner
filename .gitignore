@@ -4,3 +4,9 @@ node_modules/
 *.log
 .DS_Store
 .env*
+
+web/console/.next/
+web/console/out/
+web/console/generated/
+web/console/next-env.d.ts
+*.tsbuildinfo

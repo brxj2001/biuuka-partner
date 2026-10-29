@@ -45,7 +45,7 @@ export function createAccounts({state,codexHome,bridgeFactory,online=()=>true,op
    try{await b.initialize();}catch(e){if(e.code==='chatgpt_login_required')fail('target_login_unavailable');throw e;}
    const latest=useNative?await native():await load(id);check();requireOnline();
    if(!latest||identity(latest).id!==id)fail('account_changed');
-   const result=await b.request('account/read',{refreshToken:needsTokenRefresh(latest)});check();requireOnline();
+   const result=needsTokenRefresh(latest)?await b.request('account/read',{refreshToken:true}):{account:b.account};check();requireOnline();
    if(!result?.account)fail('target_login_unavailable');
    if(result.account.type!=='chatgpt'||result.account.email!==target.email)fail('account_mismatch');
   });
@@ -59,28 +59,32 @@ export function createAccounts({state,codexHome,bridgeFactory,online=()=>true,op
  async function query(id){requireOnline();await load(id);const current=await native(),isCurrent=current&&identity(current).id===id;const b=active=bridgeFactory(isCurrent?codexHome:home(id));operation='query_quota';return timed(b,async check=>{await b.initialize();const profile=await b.profile();check();requireOnline();if(isCurrent){const latest=await native();if(!latest||identity(latest).id!==id)fail('account_changed');await save(latest);}if(identity(await load(id)).id!==id||profile.email!==identity(await load(id)).email)fail('account_mismatch');const m=JSON.parse(await read(metadata(id))||'{}');await write(metadata(id),JSON.stringify({...m,profile,checkedAt:new Date().toISOString()}));return profile;});}
  async function refresh(id){return exclusive(()=>query(id));}
  async function switchTo(id){return exclusive(async()=>{
-  requireOnline();await load(id);switchResult=null;operation='save_current';
+  const started=performance.now(),stages=[];let stage='prepare',stageStarted=started,success=false;
+  const mark=name=>{const now=performance.now();stages.push({stage,ms:Math.round(now-stageStarted)});stage=name;stageStarted=now;operation=name;};
+  try{
+  requireOnline();await load(id);switchResult=null;mark('save_current');
   let previous=await native();if(previous)await save(previous);
-  let prepared=await verify(id,!!previous&&identity(previous).id===id);operation='inspect_desktop';const client=await desktop?.inspect();
+  mark('verify_account');let prepared=await verify(id,!!previous&&identity(previous).id===id);mark('inspect_desktop');const client=await desktop?.inspect();
   let stopped=false,written=false,next;
   try{
-   requireOnline();operation='stop_desktop';await desktop?.stop(client);stopped=true;
+   requireOnline();mark('stop_desktop');await desktop?.stop(client);stopped=true;
    // Desktop shutdown may persist rotated credentials. Read/save again only
    // after it exits; never overwrite them with the pre-shutdown snapshot.
    const latest=await native();if(previous&&latest&&identity(previous).id!==identity(latest).id)fail('account_changed');
    previous=latest;if(previous){await save(previous);if(identity(previous).id===id)prepared=previous;}
-   operation='write_login';next=prepared;requireOnline();if(await native()!==previous)fail('account_changed');await write(nativeFile,next);written=true;
-   operation='verify_current';const b=active=bridgeFactory(codexHome);
+   mark('write_login');next=prepared;requireOnline();if(await native()!==previous)fail('account_changed');await write(nativeFile,next);written=true;
+   mark('verify_current');const b=active=bridgeFactory(codexHome);
    await timed(b,async check=>{await b.initialize();const current=await native();check();requireOnline();if(!current||identity(current).id!==id||b.account.email!==identity(next).email)fail('account_mismatch');await save(current);});
   }catch(error){
    if(written){const current=await native();if(current&&identity(current).id===id){if(previous===null)await rm(nativeFile,{force:true});else await write(nativeFile,previous);}}
-   if(stopped&&client?.running){operation='restore_desktop';try{await desktop.start(client);}catch{switchResult={id,status:'restore_failed'};fail('desktop_restore_failed');}}
+   if(stopped&&client?.running){mark('restore_desktop');try{await desktop.start(client);}catch{switchResult={id,status:'restore_failed'};fail('desktop_restore_failed');}}
    if(written)fail('switch_verification_failed');throw error;
   }
-  operation='start_desktop';
+  mark('start_desktop');
   try{await desktop?.start(client);const observed=await native();if(!observed||identity(observed).id!==id)fail('account_changed');}catch{switchResult={id,status:'start_failed'};fail('desktop_start_failed');}
   switchResult={id,status:client?'restarted':'cli_only'};
-  return {switched:true,desktop:switchResult.status};
+  success=true;return {switched:true,desktop:switchResult.status};
+  }finally{mark('finished');await write(path.join(state,'switch-timing.json'),JSON.stringify({checkedAt:new Date().toISOString(),success,totalMs:Math.round(performance.now()-started),stages})).catch(()=>{});}
  });}
  async function renameAccount(id,name){return exclusive(async()=>{await load(id);if(typeof name!=='string'||name.length>60||/[\x00-\x1f]/.test(name))fail('invalid_name');const m=JSON.parse(await read(metadata(id))||'{}');await write(metadata(id),JSON.stringify({...m,name:name.trim()}));return {renamed:true};});}
  async function remove(id){return exclusive(async()=>{await load(id);const current=await native();if(current&&identity(current).id===id)fail('current_account');await rm(home(id),{recursive:true,force:true});return {removed:true};});}

@@ -95,10 +95,10 @@ try{
  Reject {Select-DesktopStarted @($started) $gui 1 @() $now.AddSeconds(-1)} 'desktop_identity_unconfirmed';$count++
  $started.CommandLine='"'+$gui+'"'
  # Exercise dispatch once and stable-main confirmation without launching a GUI.
- function Get-AppxPackage {param($ErrorAction) @()}
+ function Get-AppxPackage {param($ErrorAction,$Name) @()}
  function Start-Sleep {param($Milliseconds)}
  $script:launchCount=0;$script:live=@()
- function Get-CimInstance {param($ClassName) $script:live}
+ function Get-CimInstance {param($ClassName,$Filter,$Property) $script:live}
  function Invoke-DesktopLaunch {param($Exe,$AppId) $script:launchCount++;$script:live=@($started)}
  Start-DesktopRuntime $gui 1 2000
  if($script:launchCount -ne 1){throw 'Launch dispatched more than once'};$count++
@@ -112,7 +112,7 @@ try{
  # Run the actual stop loop against snapshots, without controlling real processes.
  $script:live=@($main,$helper,$server,$unrelated,$otherSession)
  $script:events=New-Object 'System.Collections.Generic.List[string]'
- function Get-CimInstance {param($ClassName) $script:live}
+ function Get-CimInstance {param($ClassName,$Filter,$Property) $script:live}
  function Start-Sleep {param($Milliseconds)}
  function Invoke-DesktopExit($Item,[bool]$Force){
   $script:events.Add(([string]$Force)+':'+$Item.ProcessId)

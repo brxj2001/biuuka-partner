@@ -1,0 +1,7 @@
+{
+  "name": "biuuka-partner-console",
+  "private": true,
+  "scripts": {"build": "next build", "typecheck": "tsc --noEmit"},
+  "dependencies": {"next": "15.5.9", "react": "19.2.3", "react-dom": "19.2.3", "lucide-react": "0.460.0"},
+  "devDependencies": {"typescript": "5.9.3", "@types/node": "22.19.5", "@types/react": "19.2.7", "@types/react-dom": "19.2.3"}
+}

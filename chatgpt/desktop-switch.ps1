@@ -2,6 +2,14 @@ param([ValidateSet('inspect','stop','start')][string]$Action,[string]$Descriptor
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
 $session=(Get-Process -Id $PID).SessionId
+# Filter at the CIM provider, retaining all processes in this user session so
+# intermediate parent relationships and unreadable owned processes stay visible.
+function Get-DesktopSnapshot([int]$SessionId) {
+ @(Get-CimInstance Win32_Process -Filter ("SessionId = " + $SessionId) -Property ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine,SessionId,CreationDate)
+}
+function Get-DesktopLaunchSnapshot([int]$SessionId) {
+ @(Get-CimInstance Win32_Process -Filter ("SessionId = " + $SessionId + " AND Name = 'ChatGPT.exe'") -Property ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine,SessionId,CreationDate)
+}
 function Matches($exe) {
  @(Get-CimInstance Win32_Process | Where-Object { $_.SessionId -eq $session -and $_.ExecutablePath -and $_.ExecutablePath.Equals($exe,[StringComparison]::OrdinalIgnoreCase) })
 }
@@ -123,11 +131,11 @@ function Invoke-DesktopExit($Item,[bool]$Force) {
 }
 function Stop-DesktopRuntime([string]$Exe,[int]$SessionId,[int]$GraceMs=5000,[int]$TimeoutMs=20000) {
  $watch=[Diagnostics.Stopwatch]::StartNew()
- $snapshot=@(Get-CimInstance Win32_Process)
+ $snapshot=@(Get-DesktopSnapshot $SessionId)
  $owned=@(Select-DesktopOwned $snapshot $Exe $SessionId)
  foreach($item in $owned){Invoke-DesktopExit $item $false}
  while($true){
-  $snapshot=@(Get-CimInstance Win32_Process)
+  $snapshot=@(Get-DesktopSnapshot $SessionId)
   # Include children created during graceful shutdown, but not unrelated new roots.
   $extra=@(Select-DesktopOwned $snapshot $Exe $SessionId $owned | Where-Object {$candidate=$_; -not @($owned | Where-Object {$_.ProcessId -eq $candidate.ProcessId -and $_.CreationDate -eq $candidate.CreationDate}).Count})
   $owned+=$extra
@@ -200,15 +208,15 @@ function Select-DesktopStarted($Snapshot,[string]$Exe,[int]$SessionId,$Before,[d
  })
 }
 function Start-DesktopRuntime([string]$Exe,[int]$SessionId,[int]$TimeoutMs=15000) {
- $before=@(Get-CimInstance Win32_Process)
+ $before=@(Get-DesktopLaunchSnapshot $SessionId)
  # A residual GUI is not a successful restart. Leave it alone and report failure.
  if(@($before | Where-Object {$_.SessionId -eq $SessionId -and $_.ExecutablePath -ieq $Exe}).Count){throw 'desktop_start_failed'}
- $appId=Find-DesktopPackage $Exe @(Get-AppxPackage -ErrorAction Stop)
+ $appId=Find-DesktopPackage $Exe @(Get-AppxPackage -Name OpenAI.* -ErrorAction Stop)
  $notBefore=[DateTime]::UtcNow.AddSeconds(-1)
  $watch=[Diagnostics.Stopwatch]::StartNew();$stable=$null;$stableSince=0
  Invoke-DesktopLaunch $Exe $appId
  while($watch.ElapsedMilliseconds -lt $TimeoutMs){
-  $candidates=@(Select-DesktopStarted @(Get-CimInstance Win32_Process) $Exe $SessionId $before $notBefore)
+  $candidates=@(Select-DesktopStarted @(Get-DesktopLaunchSnapshot $SessionId) $Exe $SessionId $before $notBefore)
   if($candidates.Count -gt 1){throw 'desktop_ambiguous'}
   if($candidates.Count -eq 1){
    $candidate=$candidates[0]
@@ -221,11 +229,11 @@ function Start-DesktopRuntime([string]$Exe,[int]$SessionId,[int]$TimeoutMs=15000
  throw 'desktop_start_failed'
 }
 if($Action -eq 'inspect') {
- $processes=@(Get-CimInstance Win32_Process)
+ $processes=@(Get-DesktopSnapshot $session)
  # Prefer the running GUI. Only enumerate installed packages when none is running.
  $selected=Select-CodexDesktop $processes @() $session
  if(-not $selected){
-  $installed=@(Get-AppxPackage | Where-Object { $_.Name -match '^OpenAI\.(ChatGPT|ChatGPT-Desktop|Codex)$' } | ForEach-Object {
+  $installed=@(Get-AppxPackage -Name OpenAI.* | Where-Object { $_.Name -match '^OpenAI\.(ChatGPT|ChatGPT-Desktop|Codex)$' } | ForEach-Object {
    $dir=$_.InstallLocation;$manifest=Get-AppxPackageManifest $_
    foreach($app in $manifest.Package.Applications.Application){
     if($app.Executable -match '(?i)(^|[\\/])ChatGPT\.exe$'){Join-Path $dir $app.Executable}

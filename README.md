@@ -55,6 +55,14 @@ biuuka uninstall    # 卸载 Biuuka
 - 卸载只删除 Biuuka 自身程序与数据，不删除原有 `CODEX_HOME`、`.codex`、共享 Node／Codex 或用户原有会话。
 - 安装、账号登录、额度查询和在线更新需要相应网络访问；源码测试通过不代表所有操作系统均已实机验收。
 
+## 控制台构建
+
+控制台使用 Next.js App Router、React、TypeScript 与 Lucide 图标，静态导出后由已有 Node 后台服务提供；不启动 Next.js 服务器，不提供桌面应用壳。原生托盘独立保留。
+
+在 Node.js 24 环境运行 `node scripts/test.mjs` 做隔离检查，运行 `node package.mjs` 生成安装包。构建自动使用锁文件安装 npm 依赖并生成静态资源；安装用户只运行打包后的服务及页面。GitHub 源码引导需要访问 npm registry，Windows 构建工具包包含 npm，使用固定 SHA-256 校验。第三方许可证随安装包保留。
+
+账号切换主动结束后台额度查询并等待自有进程退出，复用初始化身份结果，Windows 按当前会话查询进程。保留切换前后核验和失败恢复。最近一次切换的阶段耗时保存在 `.biuuka/switch-timing.json`，只含时间、阶段和成功状态，不含账号、令牌或对话；可在本机查看或删除，不上传网站。
+
 ## 源码结构
 
 ```text

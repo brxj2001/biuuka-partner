@@ -1,11 +1,12 @@
+import {buildConsole} from './scripts/build-console.mjs';
 import {VERSION, RELEASE} from './release.mjs';
-import { mkdir, readFile, writeFile, cp, rm, mkdtemp, realpath } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, cp, rm, mkdtemp, realpath, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { deflateRawSync, crc32 } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 const here = path.dirname(fileURLToPath(import.meta.url));
-const runtimeFiles = ['release.mjs','release.json','desktop-switch.mjs','desktop-switch.ps1','desktop-switch-macos.js','accounts.mjs','tray-control.mjs','local-profile.mjs','uninstall.mjs','uninstall-windows.ps1','chatgpt-install.mjs','chatgpt-install.ps1','brand.svg','brand.png','brand.ico','merchant.mjs','subscription.mjs','version.mjs','tray.mjs','tray-macos.js','tray-windows.ps1','live.mjs','ports.mjs','ws.cjs','WS-LICENSE','WS-SOURCE.json','access.mjs','control.mjs','console.html','console.js','console.css','pair.html','external-sdk.js','network.mjs','offline.mjs','state.mjs','records.mjs','update.mjs','supervisor.mjs','launcher.mjs','LICENSE','Service.cs','app.js','bridge.mjs','cli.mjs','index.html','mac-service.mjs','pair.js','run.ps1','runtime.mjs','server.mjs','setup.mjs','sources.json','style.css','windows.ps1'];
+const runtimeFiles = ['release.mjs','release.json','desktop-switch.mjs','desktop-switch.ps1','desktop-switch-macos.js','accounts.mjs','tray-control.mjs','local-profile.mjs','uninstall.mjs','uninstall-windows.ps1','chatgpt-install.mjs','chatgpt-install.ps1','brand.svg','brand.png','brand.ico','merchant.mjs','subscription.mjs','version.mjs','tray.mjs','tray-macos.js','tray-windows.ps1','live.mjs','ports.mjs','ws.cjs','WS-LICENSE','WS-SOURCE.json','access.mjs','control.mjs','console.html','console-assets.json','pair.html','external-sdk.js','network.mjs','offline.mjs','state.mjs','records.mjs','update.mjs','supervisor.mjs','launcher.mjs','LICENSE','Service.cs','app.js','bridge.mjs','cli.mjs','index.html','mac-service.mjs','pair.js','run.ps1','runtime.mjs','server.mjs','setup.mjs','sources.json','style.css','windows.ps1'];
 export const sourceFiles = {
   "accounts.mjs": "chatgpt/accounts.mjs",
   "bridge.mjs": "chatgpt/bridge.mjs",
@@ -44,9 +45,8 @@ export const sourceFiles = {
   "offline.mjs": "scripts/install/offline.mjs",
   "uninstall.mjs": "scripts/install/uninstall.mjs",
   "uninstall-windows.ps1": "scripts/install/uninstall-windows.ps1",
-  "console.html": "web/console/console.html",
-  "console.css": "web/console/console.css",
-  "console.js": "web/console/console.js",
+  "console.html": "web/console/generated/console.html",
+  "console-assets.json": "web/console/generated/console-assets.json",
   "pair.html": "web/console/pair.html",
   "pair.js": "web/console/pair.js",
   "external-sdk.js": "web/console/external-sdk.js",
@@ -86,6 +86,7 @@ export const sourceFiles = {
   "sources.json": "sources.json"
 };
 export async function runtimeBytes(name) {
+  if(name==='console.html'||name==='console-assets.json'||/^console-[a-f0-9]{24}\.[a-z0-9]+$/.test(name))return readFile(path.join(here,'web/console/generated',name));
   const source = sourceFiles[name];
   if (!source) throw Error('Unknown package entry: '+name);
   let bytes = await readFile(path.join(here,source));
@@ -102,17 +103,19 @@ export async function runtimeBytes(name) {
 }
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 export async function packageBiuuka({output = path.join(here,'dist')} = {}) {
+  const generated=await buildConsole();
+  const allRuntimeFiles=[...runtimeFiles,...(await readdir(generated)).filter(n=>n!=='console.html'&&n!=='console-assets.json').sort()];
   await mkdir(output, { recursive: true });
   const lockDir = path.join(output, 'package.lock'); await mkdir(lockDir);
   const stage = await mkdtemp(path.join(output, 'stage-'));
   try {
-    for (const name of runtimeFiles) {
+    for (const name of allRuntimeFiles) {
       if (name.endsWith('.ps1')) await writeFile(path.join(stage, name), '\ufeff' + (await runtimeBytes(name)).toString('utf8'));
       else await writeFile(path.join(stage, name), await runtimeBytes(name));
     }
-    const build=hash(Buffer.concat(await Promise.all([...runtimeFiles].sort().map(async name=>Buffer.concat([Buffer.from(name),await readFile(path.join(stage,name))])))));
+    const build=hash(Buffer.concat(await Promise.all([...allRuntimeFiles].sort().map(async name=>Buffer.concat([Buffer.from(name),await readFile(path.join(stage,name))])))));
     await writeFile(path.join(stage,'build-info.json'),JSON.stringify({version:VERSION,build,updateProtocol:RELEASE.updateProtocol}));
-    const packagedFiles=[...runtimeFiles,'build-info.json'];
+    const packagedFiles=[...allRuntimeFiles,'build-info.json'];
     const archive = path.join(output, 'biuuka.zip');
     // Deterministic ZIP (UTF-8 names, fixed date), built with Node only.
     const local = [], central = []; let offset = 0;

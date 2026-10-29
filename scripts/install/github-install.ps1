@@ -57,12 +57,15 @@ try {
     } finally { $Sha1.Dispose() }
     $Arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     $Platform = switch ($Arch.ToUpperInvariant()) { 'AMD64' {'win32-x64'} 'ARM64' {'win32-arm64'} default {throw 'Unsupported Windows architecture.'} }
-    $Sources = Get-Content -Raw -LiteralPath (Join-Path $Source 'sources.json') | ConvertFrom-Json
-    $Node = $Sources.$Platform.node
+    $Sources = Get-Content -Raw -LiteralPath (Join-Path $Source 'scripts/build-sources.json') | ConvertFrom-Json
+    $Node = $Sources.$Platform
     if ($Node.algorithm -ne 'sha256' -or $Node.digest -notmatch '^[a-f0-9]{64}$' -or ([Uri]$Node.url).Host -ne 'nodejs.org' -or ([Uri]$Node.url).Scheme -ne 'https') { throw 'Invalid pinned Node source.' }
-    $NodeExe = Join-Path $Stage 'node.exe'
-    Download $Node.url $NodeExe
-    if ((Get-FileHash -LiteralPath $NodeExe -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Node.digest) { throw 'Node checksum mismatch.' }
+    $NodeZip = Join-Path $Stage 'node.zip'
+    Download $Node.url $NodeZip
+    if ((Get-FileHash -LiteralPath $NodeZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Node.digest) { throw 'Node checksum mismatch.' }
+    if ($Node.directory -notmatch '^node-v[0-9.]+-win-(x64|arm64)$') { throw 'Invalid Node build directory.' }
+    Expand-Archive -LiteralPath $NodeZip -DestinationPath (Join-Path $Stage 'build-node')
+    $NodeExe = Join-Path (Join-Path (Join-Path $Stage 'build-node') $Node.directory) 'node.exe'
     $Output = Join-Path $Stage 'package'
     & $NodeExe (Join-Path $Source 'package.mjs') --output $Output
     if ($LASTEXITCODE -ne 0) { throw 'Local package build failed.' }

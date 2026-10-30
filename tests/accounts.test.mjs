@@ -12,7 +12,24 @@ test('offline import/list/rename work but remote refresh/switch do not',()=>fixt
 test('keyring store is not overwritten or silently migrated',()=>fixture(async({accounts,native,file})=>{const before=await readFile(file,'utf8');await writeFile(path.join(native,'config.toml'),'cli_auth_credentials_store = "keyring"');await assert.rejects(accounts.importCurrent(),/credential_store_unsupported/);assert.equal(await readFile(file,'utf8'),before);}));
 test('official login stays isolated; completion saves account without switching native',()=>fixture(async({accounts,file,getLogin})=>{await accounts.startLogin();assert.equal((await accounts.list()).login.status,'pending');await assert.rejects(accounts.importCurrent(),/accounts_busy/);const {b,home}=getLogin();await writeFile(path.join(home,'auth.json'),credential('second'));for(const listener of b.listeners)listener({method:'account/login/completed',params:{success:true}});for(let i=0;i<50&&!accounts.idle();i++)await new Promise(r=>setTimeout(r,10));assert.equal((await accounts.list()).accounts[0].email,'second@example.test');assert.equal(identity(await readFile(file,'utf8')).email,'first@example.test');}));
 test('cancel removes pending login, no persistent imported account',()=>fixture(async({accounts,getLogin})=>{await accounts.startLogin();const {home}=getLogin();await accounts.cancel();await assert.rejects(stat(home),{code:'ENOENT'});assert.equal((await accounts.list()).accounts.length,0);}));
-test('account directory links cannot redirect credential reads/writes',()=>fixture(async({accounts,state,native})=>{await accounts.importCurrent();const id=(await accounts.list()).current,dir=path.join(state,'accounts',id);await rm(dir,{recursive:true});await symlink(native,dir,'dir');await assert.rejects(accounts.importCurrent(),/unsafe_account_file/);}));
+test('account directory links cannot redirect credential reads/writes',()=>fixture(async({accounts,state,native})=>{await accounts.importCurrent();const id=(await accounts.list()).current,dir=path.join(state,'accounts',id);await rm(dir,{recursive:true});await symlink(native,dir,process.platform==='win32'?'junction':'dir');await assert.rejects(accounts.importCurrent(),/unsafe_account_file/);}));
+
+test('refreshing saved accounts persists each result without switching the native identity',()=>fixture(async({accounts,file})=>{
+ await accounts.importCurrent();await writeFile(file,credential('second'));await accounts.importCurrent();
+ for(const account of (await accounts.list()).accounts)await accounts.refresh(account.id);
+ const result=await accounts.list();assert.equal(result.accounts.length,2);
+ for(const account of result.accounts){assert.equal(account.profile.email,account.email);assert.ok(Number.isFinite(Date.parse(account.checkedAt)));}
+ assert.equal(await readFile(file,'utf8'),credential('second'));assert.ok(!JSON.stringify(result).includes('secret'));
+}));
+
+test('cancel during initialization prevents a later quota request or cache write',()=>{
+ let entered,release;const started=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+ return fixture(async({accounts,setProfileThrows})=>{
+  await accounts.importCurrent();const id=(await accounts.list()).current;setProfileThrows(true);
+  const refresh=accounts.refresh(id);await started;await accounts.cancel();release();
+  await assert.rejects(refresh,/cancelled/);assert.equal((await accounts.list()).accounts[0].checkedAt,null);
+ },{onAccountRead:async(home,params,b)=>{entered();await gate;return {account:b.account};}});
+});
 test('account management is local-master only, including trusted storefronts',async()=>{
  const {createServer}=await import('../core/server.mjs'),{once}=await import('node:events'),http=await import('node:http');let calls=0;
  const server=createServer({token:'fixture',port:17322,refreshMs:0,control:{enabled:()=>true,online:()=>true},accounts:{list:async()=>{calls++;return {accounts:[]};},idle:()=>true,close:async()=>{}},bridgeFactory:()=>{throw Error('unused');}});

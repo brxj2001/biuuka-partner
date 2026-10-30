@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { PRESETS } from '../chatgpt/bridge.mjs';
 import { createAccess, trustedOrigin, validOrigin } from './access.mjs';
+import {createAccountPoll, ACCOUNT_REFRESH_MS} from '../chatgpt/account-poll.mjs';
 
 export {VERSION} from '../release.mjs';
 export const TRUSTED_SITES = {has:trustedOrigin};
@@ -17,7 +18,7 @@ const resources = {
 "console.html":new URL("../web/console/generated/console.html",import.meta.url),"console-assets.json":new URL("../web/console/generated/console-assets.json",import.meta.url),"pair.html":new URL("../web/console/pair.html",import.meta.url),"pair.js":new URL("../web/console/pair.js",import.meta.url),"external-sdk.js":new URL("../web/console/external-sdk.js",import.meta.url),"index.html":new URL("../web/test/index.html",import.meta.url),"style.css":new URL("../web/test/style.css",import.meta.url),"app.js":new URL("../web/test/app.js",import.meta.url),"brand.svg":new URL("../assets/brand.svg",import.meta.url),"brand.png":new URL("../assets/brand.png",import.meta.url),"brand.ico":new URL("../assets/brand.ico",import.meta.url)
 };
 const directory = path.dirname(fileURLToPath(import.meta.url));
-export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 10000, records, localProfile, accounts, network = createNetwork(), control, chatgptInstall = createChatGPTDetector() }) {
+export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 10000, accountRefreshMs = ACCOUNT_REFRESH_MS, records, localProfile, accounts, network = createNetwork(), control, chatgptInstall = createChatGPTDetector() }) {
   const uiInstance=randomBytes(12).toString('hex');
   let consoleAssets;
   const assets=()=>consoleAssets??=(readFile(resources['console-assets.json'],'utf8').then(JSON.parse).catch(e=>{consoleAssets=null;throw e;}));
@@ -25,14 +26,15 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
   const access = control?.access || createAccess();
   const enabled=()=>control?.enabled()!==false;
   const online=()=>enabled()&&control?.online?.()!==false;
-  const reconcile=()=>{if(!online()){void accounts?.close();if(!enabled())profile=null;profileError=null;networkReport=null;network.cancel?.();readSubscription.cancel();profileBridge?.close("cancelled");activeBridge?.close("cancelled");}else{void refreshProfile();if(refreshMs>0)void refreshNetwork().catch(()=>{});}if(enabled()&&!online())void refreshProfile();live?.broadcast();};
+  const reconcile=()=>{if(!online()){void accountPoll?.cancel().catch(()=>{});void accounts?.close();if(!enabled())profile=null;profileError=null;networkReport=null;network.cancel?.();readSubscription.cancel();profileBridge?.close("cancelled");activeBridge?.close("cancelled");}else{void refreshProfile();if(refreshMs>0)void refreshNetwork().catch(()=>{});}if(enabled()&&!online())void refreshProfile();live?.broadcast();};
   let activeBridge,activeGrant,live,networkReport,updateInfo;
   const refreshNetwork=async(force=false)=>{if(!online())return null;const report=await network(force);networkReport=online()?report:null;live?.broadcast();return networkReport;};
   const refreshVersion=async()=>{if(control?.appUpdate){updateInfo=await control.appUpdate.status();live?.broadcast();}return updateInfo;};
   let draining = false, accountWaiting=false;
   let busy = false, profile, profileError, profileFlight, profileBridge, cancelProfile, retiringProfile;
+  const accountPoll=accounts?createAccountPoll({accounts,interval:accountRefreshMs,canRun:()=>online()&&!draining&&!busy&&!profileFlight&&!retiringProfile}):null;
   const refreshProfile = (requested=false) => {
-    if(!enabled()||draining||(busy&&!requested)||retiringProfile||accounts?.idle()===false)return Promise.resolve();
+    if(!enabled()||draining||(busy&&!requested)||retiringProfile||accountPoll?.idle()===false||accounts?.idle()===false)return Promise.resolve();
     if (profileFlight) return profileFlight;
     profileFlight = (async () => {
       let reader, deadline;
@@ -149,12 +151,13 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
           if(!accounts)return json(404,{error:'accounts_unavailable'});
           const action=req.url.slice('/control/accounts/'.length),keys={list:[],import:[],login:[],cancel:[],refresh:['id'],switch:['id'],rename:['id','name'],remove:['id']}[action];
           if(!keys||Object.keys(input).some(k=>!keys.includes(k)))return json(400,{error:'invalid_request'});
-          if(action==='list'){const result=await accounts.list();return json(200,{...result,operation:accountWaiting?'waiting_for_profile':result.operation});}
+          if(action==='list'){const result=await accounts.list();return json(200,{...result,busy:result.busy&&accountPoll?.idle()!==false,operation:accountWaiting?'waiting_for_profile':result.operation});}
           if(action==='cancel')return json(200,await accounts.cancel());
           if(busy||draining)return json(409,{error:'busy'});
           busy=true;
           try{
             const waitStarted=performance.now();
+            await accountPoll?.cancel();
             if(profileFlight||retiringProfile){accountWaiting=true;const reader=retiringProfile||profileBridge,flight=profileFlight;retiringProfile=reader;try{
               // User account operations preempt disposable quota polling. Keep the
               // write barrier until the owning process has actually exited.
@@ -244,6 +247,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
         if(req.url==='/record'){json(200,await records.get(input.id));return;}
         await removeRecord(input.id);json(200,{deleted:true});return;
       }
+      await accountPoll?.cancel();
       if(records&&['/test','/chat'].includes(req.url))record=await records.begin({model:input.model,effort:input.effort,preset:input.preset||'chat',prompt:input.prompt||PRESETS.find(p=>p.id===(input.preset||'pelican'))?.prompt});
       if(!online())throw Error("cancelled");
       bridge = activeBridge = bridgeFactory(); await bridge.initialize();
@@ -279,14 +283,15 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
   server.requestTimeout=15000;server.headersTimeout=10000;server.keepAliveTimeout=5000;server.maxHeadersCount=32;
   let timer;
   server.once('listening', () => {
+    accountPoll?.start();
     if (refreshMs <= 0) return;
     void refreshProfile().catch(() => {});
     timer = setInterval(() => void refreshProfile().catch(() => {}), refreshMs);
     timer.unref();
   });
   const networkTimer=setInterval(()=>{void refreshNetwork(true).catch(()=>{});void refreshVersion().catch(()=>{});},300000);networkTimer.unref();
-  server.once('close', () => { cancelProfile?.();void accounts?.close(); clearInterval(networkTimer);clearInterval(timer); profileBridge?.close(); profile = null; });
-  server.canPrepareUpdate=()=>!(busy||profileFlight||retiringProfile||accounts?.idle()===false||control?.idle?.()===false);
-  server.prepareUpdate=()=>{if(!server.canPrepareUpdate())return false;draining=true;clearInterval(timer);return true;};
+  server.once('close', () => { cancelProfile?.();void accountPoll?.close().catch(()=>{});void accounts?.close(); clearInterval(networkTimer);clearInterval(timer); profileBridge?.close(); profile = null; });
+  server.canPrepareUpdate=()=>!(busy||profileFlight||retiringProfile||accountPoll?.idle()===false||accounts?.idle()===false||control?.idle?.()===false);
+  server.prepareUpdate=()=>{if(!server.canPrepareUpdate())return false;draining=true;clearInterval(timer);void accountPoll?.close().catch(()=>{});return true;};
   return server;
 }

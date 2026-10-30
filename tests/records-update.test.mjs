@@ -1,3 +1,4 @@
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm,readFile,mkdir,writeFile} from 'node:fs/promises';
@@ -36,7 +37,7 @@ test('updater checks full package hash and native dependency compatibility befor
 test('trusted website can read/delete its test records while unrelated Codex history stays private; update waits for idle',async()=>{
  const {createServer}=await import('../core/server.mjs'),{CodexBridge}=await import('../chatgpt/bridge.mjs'),{once}=await import('node:events');
  const root=await mkdtemp(path.join(os.tmpdir(),'biuuka-record-http-')),records=new Records(root),children=[];
- const server=createServer({token:'fixture-token',refreshMs:0,records,network:async()=>({checks:[],exit:{status:'unavailable'}}),bridgeFactory:()=>{const b=new CodexBridge({command:process.execPath,args:[new URL('./fixtures/fake-codex.mjs',import.meta.url).pathname,'ok'],timeout:3000});children.push(b);return b;}});
+ const server=createServer({token:'fixture-token',refreshMs:0,records,network:async()=>({checks:[],exit:{status:'unavailable'}}),bridgeFactory:()=>{const b=new CodexBridge({command:process.execPath,args:[fileURLToPath(new URL('./fixtures/fake-codex.mjs',import.meta.url)),'ok'],timeout:3000});children.push(b);return b;}});
  server.listen(0,'127.0.0.1');await once(server,'listening');const url=`http://127.0.0.1:${server.address().port}`;
  const http=await import('node:http');
  const call=(route,body={})=>new Promise((resolve,reject)=>{const req=http.request(url+route,{method:'POST',headers:{Host:'127.0.0.1:17322',Origin:'https://biuuka.com','Content-Type':'application/json'}},res=>{const content=new Promise((done,fail)=>{let text='';res.on('data',c=>text+=c);res.on('end',()=>done(text));res.on('error',fail);});resolve({status:res.statusCode,text:()=>content,json:async()=>JSON.parse(await content)});});req.on('error',reject);req.end(JSON.stringify(body));});
@@ -60,9 +61,9 @@ test('supervisor recovers a failed switched application and releases its child o
  await writeFile(path.join(root,'config.json'),JSON.stringify({codex:process.execPath,codexHome:root,port,work:path.join(root,'work')}));
  const active=path.join(root,'app');await mkdir(active);await writeFile(path.join(active,'build-info.json'),'{}');await writeFile(path.join(active,'cli.mjs'),'process.exit(1);');
  const old=path.join(root,'update-old');await mkdir(old);
- const {runtimeBytes}=await import('../package.mjs');for(const name of ['release.mjs','release.json','desktop-switch.mjs','desktop-switch.ps1','desktop-switch-macos.js','accounts.mjs','tray-control.mjs','local-profile.mjs','chatgpt-install.mjs','chatgpt-install.ps1','merchant.mjs','subscription.mjs','version.mjs','live.mjs','ports.mjs','ws.cjs','access.mjs','control.mjs','network.mjs','cli.mjs','runtime.mjs','state.mjs','records.mjs','server.mjs','bridge.mjs','mac-service.mjs'])await writeFile(path.join(old,name),await runtimeBytes(name));
+ const {runtimeBytes}=await import('../package.mjs');for(const name of ['release.mjs','release.json','desktop-switch.mjs','desktop-switch.ps1','desktop-switch-macos.js','accounts.mjs','account-poll.mjs','tray-control.mjs','local-profile.mjs','chatgpt-install.mjs','chatgpt-install.ps1','merchant.mjs','subscription.mjs','version.mjs','live.mjs','ports.mjs','ws.cjs','access.mjs','control.mjs','network.mjs','cli.mjs','runtime.mjs','state.mjs','records.mjs','server.mjs','bridge.mjs','mac-service.mjs'])await writeFile(path.join(old,name),await runtimeBytes(name));
  await writeFile(path.join(old,'build-info.json'),'{}');
- supervisor=spawn(process.execPath,[new URL('../core/supervisor.mjs',import.meta.url).pathname],{env:{...process.env,BIUUKA_STATE:root},stdio:'ignore'});
+ supervisor=spawn(process.execPath,[fileURLToPath(new URL('../core/supervisor.mjs',import.meta.url))],{env:{...process.env,BIUUKA_STATE:root},stdio:'ignore'});
  let ready=false;
  for(let i=0;i<100;i++){try{const r=JSON.parse(await readFile(path.join(root,'runtime.json'),'utf8'));const h=await fetch(`http://127.0.0.1:${port}/health`,{signal:AbortSignal.timeout(500)});if(h.ok){pid=r.pid;ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,50));}
  assert.equal(ready,true);assert.ok((await readFile(path.join(active,'cli.mjs'),'utf8')).includes('Biuuka'));
@@ -81,7 +82,7 @@ test('silent update stages verified application, switches while idle and confirm
  await writeFile(path.join(base,'build-info.json'),JSON.stringify({build:'old',updateProtocol:1}));
  await writeFile(path.join(root,'config.json'),JSON.stringify({codex:process.execPath,codexHome:root,port,work:path.join(root,'work')}));
  const preload=path.join(root,'preload.mjs');await writeFile(preload,`import fs from 'node:fs/promises';const original=globalThis.fetch;globalThis.fetch=async(url,options)=>String(url).startsWith('https://biuuka.com/downloads/biuuka/')?new Response(await fs.readFile(${JSON.stringify(output)}+'/'+String(url).split('/').pop())):original(url,options);const timeout=globalThis.setTimeout;globalThis.setTimeout=(fn,ms,...args)=>timeout(fn,ms===60000?50:ms,...args);`);
- supervisor=spawn(process.execPath,['--import',preload,path.join(base,'supervisor.mjs')],{env:{...process.env,BIUUKA_STATE:root},stdio:'ignore'});
+ supervisor=spawn(process.execPath,['--import',pathToFileURL(preload).href,path.join(base,'supervisor.mjs')],{env:{...process.env,BIUUKA_STATE:root},stdio:'ignore'});
  let updated=false;
  for(let i=0;i<200;i++){try{const status=JSON.parse(await readFile(path.join(root,'update-status.json'),'utf8'));if(status.status==='updated'){updated=true;break;}}catch{}await new Promise(r=>setTimeout(r,50));}
  assert.equal(updated,true);const runtime=JSON.parse(await readFile(path.join(root,'runtime.json'),'utf8'));pid=runtime.pid;

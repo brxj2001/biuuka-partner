@@ -4,6 +4,19 @@ import http from 'node:http';
 import {once} from 'node:events';
 import {createServer} from '../core/server.mjs';
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
+test('scheduled account round blocks updates and yields to a user switch only after query exit',async()=>{
+ let entered,release,switched=false,calls=[];
+ const started=new Promise(r=>entered=r),exited=new Promise(r=>release=r);
+ const server=createServer({token:'fixture',refreshMs:0,accountRefreshMs:20,network:async()=>null,control:{enabled:()=>true},accounts:{
+  list:async()=>({accounts:[{id:'first'},{id:'second'}]}),idle:()=>true,close(){},cancel(){},
+  refresh:async id=>{calls.push(id);entered();await exited;},switchTo:async()=>{switched=true;return {switched:true};}
+ },bridgeFactory:()=>({initialize:async()=>{},profile:async()=>({}),close(){}})});
+ server.listen(0,'127.0.0.1');await once(server,'listening');
+ try{await started;assert.equal(server.canPrepareUpdate(),false);
+  const result=request(server,'/control/accounts/switch',{id:'second'});await delay(40);assert.equal(switched,false);
+  release();assert.equal((await result).status,200);assert.equal(switched,true);assert.deepEqual(calls,['first']);
+ }finally{release();server.closeAllConnections();await new Promise(r=>server.close(r));}
+});
 function request(server,path,body){return new Promise((resolve,reject)=>{const req=http.request({hostname:'127.0.0.1',port:server.address().port,path,method:body?'POST':'GET',headers:{Host:'127.0.0.1:17322',Authorization:'Bearer fixture','Content-Type':'application/json'}},res=>{let text='';res.on('data',b=>text+=b);res.on('end',()=>resolve({status:res.statusCode,text,headers:res.headers}));});req.on('error',reject);req.end(body?JSON.stringify(body):undefined);});}
 test('switch preempts hanging poll, waits for exit and suppresses new polls until switch completes',async()=>{
  let entered,exit,complete,called=false,starts=0;

@@ -24,6 +24,7 @@ export function needsTokenRefresh(raw,now=Date.now()){
 // with a different auth.json or change the user's credential-store preference.
 export function createAccounts({state,codexHome,bridgeFactory,online=()=>true,operationTimeout=30000,desktop=null,cleanup=dir=>rm(dir,{recursive:true,force:true,maxRetries:8,retryDelay:150})}){
  const root=path.join(state,'accounts'),nativeFile=path.join(codexHome,'auth.json');let locked=false,pending=null,loginResult=null,active=null,operation=null,switchResult=null;
+ let queryGeneration=0;
  const home=id=>{if(!idPattern.test(id||''))fail('invalid_account');return path.join(root,id);};
  const auth=id=>path.join(home(id),'auth.json');
  const metadata=id=>path.join(home(id),'account.json');
@@ -56,7 +57,19 @@ export function createAccounts({state,codexHome,bridgeFactory,online=()=>true,op
   return prepared;
  }
  function requireOnline(){if(!online())fail('network_disabled');}
- async function query(id){requireOnline();await load(id);const current=await native(),isCurrent=current&&identity(current).id===id;const b=active=bridgeFactory(isCurrent?codexHome:home(id));operation='query_quota';return timed(b,async check=>{await b.initialize();const profile=await b.profile();check();requireOnline();if(isCurrent){const latest=await native();if(!latest||identity(latest).id!==id)fail('account_changed');await save(latest);}if(identity(await load(id)).id!==id||profile.email!==identity(await load(id)).email)fail('account_mismatch');const m=JSON.parse(await read(metadata(id))||'{}');await write(metadata(id),JSON.stringify({...m,profile,checkedAt:new Date().toISOString()}));return profile;});}
+ async function query(id){
+  const generation=queryGeneration;
+  const allowed=()=>{requireOnline();if(generation!==queryGeneration)fail('cancelled');};
+  allowed();await load(id);const current=await native(),isCurrent=current&&identity(current).id===id;
+  allowed();const b=active=bridgeFactory(isCurrent?codexHome:home(id));operation='query_quota';
+  return timed(b,async check=>{
+   allowed();await b.initialize();check();allowed();const profile=await b.profile();check();allowed();
+   if(isCurrent){const latest=await native();check();allowed();if(!latest||identity(latest).id!==id)fail('account_changed');await save(latest);}
+   if(identity(await load(id)).id!==id||profile.email!==identity(await load(id)).email)fail('account_mismatch');
+   const m=JSON.parse(await read(metadata(id))||'{}');check();allowed();
+   await write(metadata(id),JSON.stringify({...m,profile,checkedAt:new Date().toISOString()}));return profile;
+  });
+ }
  async function refresh(id){return exclusive(()=>query(id));}
  async function switchTo(id){return exclusive(async()=>{
   const started=performance.now(),stages=[];let stage='prepare',stageStarted=started,success=false;
@@ -97,6 +110,7 @@ export function createAccounts({state,codexHome,bridgeFactory,online=()=>true,op
  // Codex may release SQLite files shortly after its process exits.
  async function cleanupLogin(dir){try{await cleanup(dir);return true;}catch{return false;}}
  async function cancel(){
+  queryGeneration++;
   active?.close();const p=pending;if(!p)return {cancelled:true};
   if(p.completion){await p.completion;return {cancelled:false};}
   pending=null;clearTimeout(p.timer);p.bridge.close();

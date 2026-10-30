@@ -37,3 +37,13 @@ test('exported console serves only manifest assets and keeps strict CSP',async()
  try{const r=await request(server,'/console');assert.equal(r.status,200);assert.match(r.headers['content-security-policy'],/sha256-/);assert.doesNotMatch(r.headers['content-security-policy'],/unsafe-inline|unsafe-eval/);const src=r.text.match(/src="(\/_next\/[^\"]+)"/)[1];assert.equal((await request(server,src)).status,200);assert.equal((await request(server,'/_next/not-listed.js')).status,404);assert.notEqual((await request(server,'/_next/../core/server.mjs')).status,200);}
  finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
 });
+
+test('record preview permits only the hashed receiver in an isolated document',async()=>{
+ const server=createServer({token:'fixture',refreshMs:0,control:{enabled:()=>false}});server.listen(0,'127.0.0.1');await once(server,'listening');
+ try{
+  const page=await request(server,'/console');assert.match(page.headers['content-security-policy'],/frame-src 'self'/);
+  const result=await request(server,'/record-preview');assert.equal(result.status,200);
+  const csp=result.headers['content-security-policy'];assert.match(csp,/script-src 'sha256-/);assert.match(csp,/sandbox allow-scripts/);assert.doesNotMatch(csp,/allow-same-origin|script-src[^;]*unsafe-inline/);assert.match(csp,/connect-src 'none'/);assert.match(csp,/frame-src 'none'/);assert.match(csp,/form-action 'none'/);
+  assert.ok(!result.text.includes('fixture'));assert.match(result.text,/event.source!==parent/);
+ }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
+});

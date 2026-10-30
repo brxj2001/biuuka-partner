@@ -5,7 +5,7 @@ import {createChatGPTDetector} from '../chatgpt/chatgpt-install.mjs';
 import {attachLive} from './live.mjs';
 import { createNetwork } from '../network/network.mjs';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { PRESETS } from '../chatgpt/bridge.mjs';
@@ -15,6 +15,7 @@ import {createAccountPoll, ACCOUNT_REFRESH_MS} from '../chatgpt/account-poll.mjs
 export {VERSION} from '../release.mjs';
 export const TRUSTED_SITES = {has:trustedOrigin};
 const resources = {
+"record-preview.html":new URL("../web/console/record-preview.html",import.meta.url),"record-preview.js":new URL("../web/console/record-preview.js",import.meta.url),
 "console.html":new URL("../web/console/generated/console.html",import.meta.url),"console-assets.json":new URL("../web/console/generated/console-assets.json",import.meta.url),"pair.html":new URL("../web/console/pair.html",import.meta.url),"pair.js":new URL("../web/console/pair.js",import.meta.url),"external-sdk.js":new URL("../web/console/external-sdk.js",import.meta.url),"index.html":new URL("../web/test/index.html",import.meta.url),"style.css":new URL("../web/test/style.css",import.meta.url),"app.js":new URL("../web/test/app.js",import.meta.url),"brand.svg":new URL("../assets/brand.svg",import.meta.url),"brand.png":new URL("../assets/brand.png",import.meta.url),"brand.ico":new URL("../assets/brand.ico",import.meta.url)
 };
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -83,8 +84,16 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
       if(requestOrigin&&requestOrigin!==origin||req.headers['sec-fetch-dest']==='iframe'||req.headers['sec-fetch-site']==='cross-site'&&req.headers['sec-fetch-mode']!=='navigate')return json(403,{error:'origin_rejected'});
       const name=url.pathname==='/console'?'console.html':'pair.html';
       let body;try{body=await readFile(resources[name],'utf8');
-      if(name==='console.html'){const manifest=await assets();const hashes=manifest.scriptHashes.filter(h=>/^'sha256-[A-Za-z0-9+/=]+'$/.test(h)).join(' ');res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'self' ${hashes}; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);body=body.replace('__CONSOLE_TOKEN__',token);}
+      if(name==='console.html'){const manifest=await assets();const hashes=manifest.scriptHashes.filter(h=>/^'sha256-[A-Za-z0-9+/=]+'$/.test(h)).join(' ');res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'self' ${hashes}; style-src 'self'; img-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);body=body.replace('__CONSOLE_TOKEN__',token);}
       }catch{return json(503,{error:'console_build_required'});}
+      res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(body);return;
+    }
+    if(req.method==='GET'&&url.pathname==='/record-preview'){
+      if(external||requestOrigin&&requestOrigin!==origin||req.headers['sec-fetch-site']==='cross-site')return json(403,{error:'origin_rejected'});
+      const receiver=await readFile(resources['record-preview.js'],'utf8');
+      const hash=createHash('sha256').update(receiver).digest('base64');
+      res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'sha256-${hash}'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts`);
+      const body=(await readFile(resources['record-preview.html'],'utf8')).replace('<script src="/record-preview.js"></script>','<script>'+receiver+'</script>');
       res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(body);return;
     }
     if(external){

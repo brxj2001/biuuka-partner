@@ -22,6 +22,41 @@ test('refreshing saved accounts persists each result without switching the nativ
  assert.equal(await readFile(file,'utf8'),credential('second'));assert.ok(!JSON.stringify(result).includes('secret'));
 }));
 
+test('bulk refresh persists every result and waits for each bridge exit without switching login',()=>{
+ let running=0,finished=0;
+ return fixture(async({accounts,file})=>{
+  await accounts.importCurrent();await writeFile(file,credential('second'));await accounts.importCurrent();
+  assert.deepEqual(await accounts.refreshAll(),{total:2,succeeded:2,failed:0});
+  assert.equal(finished,2);assert.equal(running,0);assert.equal(await readFile(file,'utf8'),credential('second'));
+  for(const item of (await accounts.list()).accounts)assert.ok(item.checkedAt&&item.profile.email===item.email);
+ },{onAccountRead:async(home,params,b)=>{assert.equal(running++,0);return {account:b.account};},onBridgeClose:async()=>{await new Promise(r=>setTimeout(r,5));running--;finished++;}});
+});
+test('bulk refresh continues after one account fails and exposes counts only',()=>{
+ let calls=0;
+ return fixture(async({accounts,file})=>{
+  await accounts.importCurrent();await writeFile(file,credential('second'));await accounts.importCurrent();
+  assert.deepEqual(await accounts.refreshAll(),{total:2,succeeded:1,failed:1});
+  assert.equal((await accounts.list()).accounts.filter(a=>a.checkedAt).length,1);
+ },{onAccountRead:async(home,params,b)=>{if(++calls===1)throw Error('private fixture failure');return {account:b.account};}});
+});
+test('bulk refresh cancellation holds the lock through exit and never starts the next account',()=>{
+ let entered,release,calls=0;const started=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+ return fixture(async({accounts,file})=>{
+  await accounts.importCurrent();await writeFile(file,credential('second'));await accounts.importCurrent();
+  const flight=accounts.refreshAll();await started;await assert.rejects(accounts.importCurrent(),/accounts_busy/);
+  await accounts.cancel();assert.equal(accounts.idle(),false);release();await assert.rejects(flight,/cancelled/);
+  assert.equal(calls,1);assert.equal(accounts.idle(),true);assert.equal((await accounts.list()).accounts.filter(a=>a.checkedAt).length,0);
+ },{onAccountRead:async(home,params,b)=>{calls++;entered();await gate;return {account:b.account};}});
+});
+test('bulk refresh refuses offline access and stops when bridge exit is unconfirmed',()=>{
+ let calls=0;
+ return fixture(async({accounts,file,setOnline})=>{
+  await accounts.importCurrent();await writeFile(file,credential('second'));await accounts.importCurrent();
+  setOnline(false);await assert.rejects(accounts.refreshAll(),/network_disabled/);assert.equal(calls,0);
+  setOnline(true);await assert.rejects(accounts.refreshAll(),/shutdown_unconfirmed/);assert.equal(calls,1);assert.equal(accounts.idle(),false);await assert.rejects(accounts.importCurrent(),/shutdown_unconfirmed/);
+ },{onAccountRead:async(home,params,b)=>{calls++;return {account:b.account};},onBridgeClose:async()=>{throw Object.assign(Error('shutdown_unconfirmed'),{code:'shutdown_unconfirmed'});}});
+});
+
 test('cancel during initialization prevents a later quota request or cache write',()=>{
  let entered,release;const started=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
  return fixture(async({accounts,setProfileThrows})=>{

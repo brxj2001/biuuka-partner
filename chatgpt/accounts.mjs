@@ -24,12 +24,12 @@ export function needsTokenRefresh(raw,now=Date.now()){
 // with a different auth.json or change the user's credential-store preference.
 export function createAccounts({state,codexHome,bridgeFactory,online=()=>true,operationTimeout=30000,desktop=null,cleanup=dir=>rm(dir,{recursive:true,force:true,maxRetries:8,retryDelay:150})}){
  const root=path.join(state,'accounts'),nativeFile=path.join(codexHome,'auth.json');let locked=false,pending=null,loginResult=null,active=null,operation=null,switchResult=null;
- let queryGeneration=0;
+ let queryGeneration=0,queryBlocked=false;
  const home=id=>{if(!idPattern.test(id||''))fail('invalid_account');return path.join(root,id);};
  const auth=id=>path.join(home(id),'auth.json');
  const metadata=id=>path.join(home(id),'account.json');
  async function native(){const config=await read(path.join(codexHome,'config.toml'))||'';if(/^\s*cli_auth_credentials_store\s*=\s*["'](?!file["'])/m.test(config))fail('credential_store_unsupported');return read(nativeFile);}
- async function exclusive(fn){if(locked||pending)fail('accounts_busy');locked=true;try{await safeDirectory(root);return await fn();}finally{locked=false;operation=null;}}
+ async function exclusive(fn){if(queryBlocked)fail('shutdown_unconfirmed');if(locked||pending)fail('accounts_busy');locked=true;try{await safeDirectory(root);return await fn();}finally{locked=false;operation=null;}}
  async function save(raw){const item=identity(raw);await safeDirectory(home(item.id));const old=JSON.parse(await read(metadata(item.id))||'{}');await write(auth(item.id),raw);await write(path.join(home(item.id),'config.toml'),'cli_auth_credentials_store = "file"\n');await write(metadata(item.id),JSON.stringify({...old,...item,name:old.name||'',savedAt:new Date().toISOString()}));return item;}
  async function load(id){await safeDirectory(home(id));const raw=await read(auth(id));if(!raw||identity(raw).id!==id)fail('invalid_account');return raw;}
  async function list(){let current=null,storeError=null;try{const raw=await native();if(raw)current=identity(raw).id;}catch(e){storeError=e.code||'account_unavailable';}
@@ -71,6 +71,17 @@ export function createAccounts({state,codexHome,bridgeFactory,online=()=>true,op
   });
  }
  async function refresh(id){return exclusive(()=>query(id));}
+ async function refreshAll(){return exclusive(async()=>{
+  requireOnline();const generation=queryGeneration,snapshot=await list();
+  if(snapshot.storeError)fail(snapshot.storeError);
+  const result={total:snapshot.accounts.length,succeeded:0,failed:0};
+  for(const account of snapshot.accounts){
+   requireOnline();if(generation!==queryGeneration)fail('cancelled');
+   try{await query(account.id);result.succeeded++;}
+   catch(e){if(e.code==='shutdown_unconfirmed')queryBlocked=true;if(['cancelled','network_disabled','credential_store_unsupported','shutdown_unconfirmed'].includes(e.code))throw e;result.failed++;}
+  }
+  return result;
+ });}
  async function switchTo(id){return exclusive(async()=>{
   const started=performance.now(),stages=[];let stage='prepare',stageStarted=started,success=false;
   const mark=name=>{const now=performance.now();stages.push({stage,ms:Math.round(now-stageStarted)});stage=name;stageStarted=now;operation=name;};
@@ -155,5 +166,5 @@ export function createAccounts({state,codexHome,bridgeFactory,online=()=>true,op
    return {authUrl:p.authUrl};
   }catch{await cancel();fail('login_failed');}
  });}
- return {list,importCurrent,refresh,switchTo,rename:renameAccount,remove,startLogin,cancel,idle:()=>!locked&&!pending,close:cancel};
+ return {list,importCurrent,refresh,refreshAll,switchTo,rename:renameAccount,remove,startLogin,cancel,idle:()=>!locked&&!pending&&!queryBlocked,close:cancel};
 }

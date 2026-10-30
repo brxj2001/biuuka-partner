@@ -18,6 +18,17 @@ test('scheduled account round blocks updates and yields to a user switch only af
  }finally{release();server.closeAllConnections();await new Promise(r=>server.close(r));}
 });
 function request(server,path,body){return new Promise((resolve,reject)=>{const req=http.request({hostname:'127.0.0.1',port:server.address().port,path,method:body?'POST':'GET',headers:{Host:'127.0.0.1:17322',Authorization:'Bearer fixture','Content-Type':'application/json'}},res=>{let text='';res.on('data',b=>text+=b);res.on('end',()=>resolve({status:res.statusCode,text,headers:res.headers}));});req.on('error',reject);req.end(body?JSON.stringify(body):undefined);});}
+
+test('manual bulk query uses the management lock and rejects duplicate requests and extra fields',async()=>{
+ let entered,release,calls=0;const started=new Promise(r=>entered=r),done=new Promise(r=>release=r);
+ const server=createServer({token:'fixture',refreshMs:0,accountRefreshMs:0,control:{enabled:()=>true},accounts:{idle:()=>true,close(){},refreshAll:async()=>{calls++;entered();await done;return {total:2,succeeded:1,failed:1};}}});
+ server.listen(0,'127.0.0.1');await once(server,'listening');
+ try{assert.equal((await request(server,'/control/accounts/refresh-all',{id:'unexpected'})).status,400);
+  const first=request(server,'/control/accounts/refresh-all',{});await started;assert.equal(server.canPrepareUpdate(),false);
+  assert.equal((await request(server,'/control/accounts/refresh-all',{})).status,409);release();
+  const result=await first;assert.equal(result.status,200);assert.deepEqual(JSON.parse(result.text),{total:2,succeeded:1,failed:1});assert.equal(calls,1);
+ }finally{release();server.closeAllConnections();await new Promise(r=>server.close(r));}
+});
 test('switch preempts hanging poll, waits for exit and suppresses new polls until switch completes',async()=>{
  let entered,exit,complete,called=false,starts=0;
  const started=new Promise(r=>entered=r),exited=new Promise(r=>exit=r),done=new Promise(r=>complete=r);

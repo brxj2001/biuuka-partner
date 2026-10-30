@@ -158,7 +158,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
       try{const input=await bodyJson();
         if(req.url.startsWith('/control/accounts/')){
           if(!accounts)return json(404,{error:'accounts_unavailable'});
-          const action=req.url.slice('/control/accounts/'.length),keys={list:[],import:[],login:[],cancel:[],refresh:['id'],switch:['id'],rename:['id','name'],remove:['id']}[action];
+          const action=req.url.slice('/control/accounts/'.length),keys={list:[],import:[],login:[],cancel:[],'refresh-all':[],refresh:['id'],switch:['id'],rename:['id','name'],remove:['id']}[action];
           if(!keys||Object.keys(input).some(k=>!keys.includes(k)))return json(400,{error:'invalid_request'});
           if(action==='list'){const result=await accounts.list();return json(200,{...result,busy:result.busy&&accountPoll?.idle()!==false,operation:accountWaiting?'waiting_for_profile':result.operation});}
           if(action==='cancel')return json(200,await accounts.cancel());
@@ -176,7 +176,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
               retiringProfile=null;
             }finally{accountWaiting=false;}}
             const waitMs=Math.round(performance.now()-waitStarted);
-            const result=await ({import:()=>accounts.importCurrent(),login:()=>accounts.startLogin(),refresh:()=>accounts.refresh(input.id),switch:()=>accounts.switchTo(input.id),rename:()=>accounts.rename(input.id,input.name),remove:()=>accounts.remove(input.id)})[action]();
+            const result=await ({import:()=>accounts.importCurrent(),login:()=>accounts.startLogin(),'refresh-all':()=>accounts.refreshAll(),refresh:()=>accounts.refresh(input.id),switch:()=>accounts.switchTo(input.id),rename:()=>accounts.rename(input.id,input.name),remove:()=>accounts.remove(input.id)})[action]();
             if(action==='switch'){profile=null;profileError=null;live?.broadcast();}
             return json(200,action==='switch'?{...result,backgroundWaitMs:waitMs}:result);
           }catch(e){if(action==='switch'){profile=null;profileError=null;live?.broadcast();}const allowed=['desktop_window_unavailable','desktop_restore_failed','desktop_inspect_failed','desktop_stop_failed','desktop_start_failed','desktop_custom_home','desktop_ambiguous','desktop_identity_unconfirmed','target_login_unavailable','shutdown_unconfirmed','codex_request_failed','account_timeout','accounts_busy','network_disabled','credential_store_unsupported','chatgpt_login_required','invalid_account','invalid_name','current_account','account_changed','account_mismatch','switch_verification_failed','login_failed','unsafe_account_file'];return json(409,{error:allowed.includes(e.code)?e.code:'account_operation_failed'});}

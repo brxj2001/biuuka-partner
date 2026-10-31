@@ -7,6 +7,11 @@ import { CodexBridge } from '../chatgpt/bridge.mjs';
 import { createServer } from '../core/server.mjs';
 const fixture = fileURLToPath(new URL('./fixtures/fake-codex.mjs', import.meta.url));
 function bridge(mode = 'ok', timeout = 3000) { return new CodexBridge({ command: process.execPath, args: [fixture, mode], timeout }); }
+test('reset credit projection uses the authoritative count, keeps zero distinct and drops detail identities',async()=>{
+ for(const [mode,expected] of [['reset-two',2],['reset-zero',0],['ok',null],['no-limits',null],['reset-negative',null],['reset-string',null],['reset-fraction',null],['reset-overflow',null]]){
+  const b=bridge(mode);try{await b.initialize();const profile=await b.profile();assert.equal(profile.resetCredits,expected);assert.doesNotMatch(JSON.stringify(profile),/must-not-leak|availableCount|secret-upstream-error/);}finally{await b.closeAndWait();}
+ }
+});
 
 test('streams only the test thread; persistent read-only session and preset are required', async () => {
   const b = bridge(); const events = [];

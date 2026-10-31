@@ -13,10 +13,10 @@ test('offline identity and subscription stay local; quota survives restart witho
  try{
   await writeFile(path.join(dir,'auth.json'),auth('one@example.test'));
   const reader=createLocalProfile(dir,dir),first=await reader.read();assert.equal(first.plan,'plus');assert.equal(first.limits.length,0);assert.equal(first.subscription.source,'local_login');
-  await reader.save({...first,checkedAt:'2026-10-27T00:00:00Z',limits:[{id:'codex',primary:{usedPercent:25,windowDurationMins:300,resetsAt:123},secondary:null}],secret:'must-not-save'});
-  const next=await createLocalProfile(dir,dir).read();assert.equal(next.limits[0].primary.usedPercent,25);assert.equal(next.offline,true);assert.equal(next.checkedAt,'2026-10-27T00:00:00Z');
+  await reader.save({...first,checkedAt:'2026-10-27T00:00:00Z',resetCredits:3,limits:[{id:'codex',primary:{usedPercent:25,windowDurationMins:300,resetsAt:123},secondary:null}],secret:'must-not-save'});
+  const next=await createLocalProfile(dir,dir).read();assert.equal(next.limits[0].primary.usedPercent,25);assert.equal(next.offline,true);assert.equal(next.resetCredits,3);assert.equal(next.checkedAt,'2026-10-27T00:00:00Z');
   assert.doesNotMatch(await readFile(path.join(dir,'account-snapshot.json'),'utf8'),/private-token|must-not-save|one@example/);
-  await writeFile(path.join(dir,'auth.json'),auth('two@example.test'));assert.equal((await reader.read()).limits.length,0);
+  await writeFile(path.join(dir,'auth.json'),auth('two@example.test'));assert.equal((await reader.read()).limits.length,0);assert.equal((await reader.read()).resetCredits,null);
   await writeFile(path.join(dir,'config.toml'),'cli_auth_credentials_store = "keyring"');assert.equal(await reader.read(),null);
  }finally{await rm(dir,{recursive:true,force:true});}
 });

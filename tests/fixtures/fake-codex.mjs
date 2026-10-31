@@ -9,7 +9,8 @@ createInterface({ input: process.stdin }).on('line', line => {
   else if (q.method === 'account/read') reply({ account: { type: mode === 'apikey' ? 'apiKey' : 'chatgpt', email: 'local@example.invalid', planType: 'pro', accessToken: 'must-not-leak' } });
   else if (q.method === 'account/rateLimits/read') {
     if (mode === 'no-limits') { send({ id: q.id, error: { message: 'secret-upstream-error' } }); return; }
-    reply({ accountId: 'must-not-leak', rateLimits: { limitId: 'codex', primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1800000000 }, private: 'must-not-leak' } });
+    const resetCounts={'reset-two':2,'reset-zero':0,'reset-negative':-1,'reset-string':'2','reset-fraction':1.5,'reset-overflow':1e20};
+    reply({ accountId: 'must-not-leak', rateLimitResetCredits:mode in resetCounts?{availableCount:resetCounts[mode],credits:[{id:'must-not-leak'}]}:null, rateLimits: { limitId: 'codex', primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1800000000 }, private: 'must-not-leak' } });
   }
   else if (q.method === 'thread/name/set') { threadName = q.params.name; reply({}); }
   else if (q.method === 'thread/list') reply({ data: mode === 'not-listed' ? [] : [

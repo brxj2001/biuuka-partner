@@ -24,7 +24,7 @@ export function createLocalProfile(home,state){
   return {
     async save(profile){
       const current=await identity();if(!current||profile.email!==current.account.email||profile.plan!==current.account.planType)return;
-      const snapshot={key:current.key,checkedAt:profile.checkedAt,limits:(profile.limits||[]).slice(0,20).map(v=>({id:text(v.id),name:text(v.name),primary:window(v.primary),secondary:window(v.secondary)}))};
+      const snapshot={key:current.key,checkedAt:profile.checkedAt,resetCredits:Number.isSafeInteger(profile.resetCredits)&&profile.resetCredits>=0?profile.resetCredits:null,limits:(profile.limits||[]).slice(0,20).map(v=>({id:text(v.id),name:text(v.name),primary:window(v.primary),secondary:window(v.secondary)}))};
       await mkdir(state,{recursive:true,mode:0o700});const tmp=file+'.'+randomBytes(8).toString('hex');
       await writeFile(tmp,JSON.stringify(snapshot),{mode:0o600});await rename(tmp,file);
     },
@@ -33,7 +33,7 @@ export function createLocalProfile(home,state){
       let cache;try{const raw=await readFile(file,'utf8');if(raw.length<=65536)cache=JSON.parse(raw);}catch{}
       const matching=cache?.key===current.key&&Number.isFinite(Date.parse(cache?.checkedAt));
       const limits=matching&&Array.isArray(cache.limits)?cache.limits.slice(0,20).map(v=>({id:text(v.id),name:text(v.name),primary:window(v.primary),secondary:window(v.secondary)})):[];
-      return {email:current.account.email,plan:current.account.planType,login:'chatgpt',offline:true,limits,limitsStatus:limits.length?'available':'unavailable',checkedAt:matching?cache.checkedAt:null,subscription:{expiresAt:current.local.expiresAt,checkedAt:current.local.checkedAt,source:current.local.expiresAt?'local_login':null,status:current.local.expiresAt?'snapshot':'unavailable'}};
+      return {email:current.account.email,plan:current.account.planType,login:'chatgpt',offline:true,resetCredits:matching&&Number.isSafeInteger(cache.resetCredits)&&cache.resetCredits>=0?cache.resetCredits:null,limits,limitsStatus:limits.length?'available':'unavailable',checkedAt:matching?cache.checkedAt:null,subscription:{expiresAt:current.local.expiresAt,checkedAt:current.local.checkedAt,source:current.local.expiresAt?'local_login':null,status:current.local.expiresAt?'snapshot':'unavailable'}};
     }
   };
 }

@@ -64,9 +64,11 @@ export class CodexBridge {
       usedPercent: number(value.usedPercent), windowDurationMins: number(value.windowDurationMins),
       resetsAt: number(value.resetsAt),
     } : null;
-    const profile = { email: text(this.account.email), plan: text(this.account.planType), login: 'chatgpt', limits: [], limitsStatus: 'unavailable' };
+    const profile = { email: text(this.account.email), plan: text(this.account.planType), login: 'chatgpt', limits: [], resetCredits: null, limitsStatus: 'unavailable' };
     try {
       const result = await this.request('account/rateLimits/read');
+      const count=result.rateLimitResetCredits?.availableCount;
+      profile.resetCredits=Number.isSafeInteger(count)&&count>=0?count:null;
       const buckets = result.rateLimitsByLimitId && Object.keys(result.rateLimitsByLimitId).length
         ? Object.entries(result.rateLimitsByLimitId) : result.rateLimits ? [[result.rateLimits.limitId || 'codex', result.rateLimits]] : [];
       profile.limits = buckets.slice(0, 20).map(([id, item]) => ({

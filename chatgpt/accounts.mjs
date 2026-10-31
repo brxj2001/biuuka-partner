@@ -4,6 +4,13 @@ import {createHash,randomUUID} from 'node:crypto';
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const digest=value=>createHash('sha256').update(value).digest('hex');
 const idPattern=/^[a-f0-9]{64}$/;
+export function accessTokenExpiresAt(raw){
+ try{const token=JSON.parse(raw).tokens.access_token;if(typeof token!=='string'||token.split('.').length!==3)return null;
+  const {exp}=JSON.parse(Buffer.from(token.split('.')[1],'base64url'));
+  if(typeof exp!=='number'||!Number.isFinite(exp)||exp<=0)return null;
+  return new Date(exp*1000).toISOString();
+ }catch{return null;}
+}
 async function read(file){try{const s=await lstat(file);if(!s.isFile()||s.isSymbolicLink()||s.size>1048576)fail('unsafe_account_file');return await readFile(file,'utf8');}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 async function safeDirectory(dir){await mkdir(dir,{recursive:true,mode:0o700});const st=await lstat(dir);if(!st.isDirectory()||st.isSymbolicLink())fail('unsafe_account_file');}
 async function write(file,value){await mkdir(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID();try{await writeFile(tmp,value,{mode:0o600,flag:'wx'});await rename(tmp,file);}finally{await rm(tmp,{force:true});}}
@@ -32,9 +39,9 @@ export function createAccounts({state,codexHome,bridgeFactory,online=()=>true,op
  async function exclusive(fn){if(queryBlocked)fail('shutdown_unconfirmed');if(locked||pending)fail('accounts_busy');locked=true;try{await safeDirectory(root);return await fn();}finally{locked=false;operation=null;}}
  async function save(raw){const item=identity(raw);await safeDirectory(home(item.id));const old=JSON.parse(await read(metadata(item.id))||'{}');await write(auth(item.id),raw);await write(path.join(home(item.id),'config.toml'),'cli_auth_credentials_store = "file"\n');await write(metadata(item.id),JSON.stringify({...old,...item,name:old.name||'',savedAt:new Date().toISOString()}));return item;}
  async function load(id){await safeDirectory(home(id));const raw=await read(auth(id));if(!raw||identity(raw).id!==id)fail('invalid_account');return raw;}
- async function list(){let current=null,storeError=null;try{const raw=await native();if(raw)current=identity(raw).id;}catch(e){storeError=e.code||'account_unavailable';}
+ async function list(){let current=null,storeError=null,currentRaw=null;try{const raw=await native();if(raw){current=identity(raw).id;currentRaw=raw;}}catch(e){storeError=e.code||'account_unavailable';}
  await safeDirectory(root);const names=await readdir(root).catch(e=>{if(e.code==='ENOENT')return [];throw e;});const accounts=[];
- for(const id of names.filter(n=>idPattern.test(n))){try{const i=identity(await load(id)),m=JSON.parse(await read(metadata(id))||'{}');accounts.push({...i,name:typeof m.name==='string'?m.name.slice(0,60):'',current:id===current,profile:m.profile||null,checkedAt:m.checkedAt||null});}catch{}}
+ for(const id of names.filter(n=>idPattern.test(n))){try{const raw=await load(id),i=identity(raw),m=JSON.parse(await read(metadata(id))||'{}');accounts.push({...i,accessTokenExpiresAt:accessTokenExpiresAt(id===current?currentRaw:raw),name:typeof m.name==='string'?m.name.slice(0,60):'',current:id===current,profile:m.profile||null,checkedAt:m.checkedAt||null});}catch{}}
  return {accounts,current,storeError,login:pending?{status:pending.status||'pending',authUrl:pending.authUrl||null}:loginResult,busy:locked,operation,switchResult};}
  async function importCurrent(){return exclusive(async()=>{const raw=await native();if(!raw)fail('chatgpt_login_required');await save(raw);return {imported:true};});}
  async function timed(b,fn){let timer,expired=false;const check=()=>{if(expired)fail('account_timeout');};try{return await Promise.race([Promise.resolve().then(()=>fn(check)),new Promise((_,reject)=>{timer=setTimeout(()=>{expired=true;reject(Object.assign(Error('account_timeout'),{code:'account_timeout'}));},operationTimeout);})]);}finally{clearTimeout(timer);try{if(b.closeAndWait)await b.closeAndWait();else b.close();}finally{if(active===b)active=null;}}}

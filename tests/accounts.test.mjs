@@ -1,7 +1,23 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,stat,symlink} from 'node:fs/promises';import os from 'node:os';import path from 'node:path';
-import {createAccounts,identity,needsTokenRefresh} from '../chatgpt/accounts.mjs';
+import {createAccounts,identity,needsTokenRefresh,accessTokenExpiresAt} from '../chatgpt/accounts.mjs';
 const credential=name=>JSON.stringify({auth_mode:'chatgpt',tokens:{id_token:'e30.'+Buffer.from(JSON.stringify({email:name+'@example.test','https://api.openai.com/auth':{chatgpt_account_id:name,chatgpt_plan_type:'plus'}})).toString('base64url')+'.sig',access_token:'secret-access-'+name,refresh_token:'secret-refresh-'+name,account_id:name}});
+const expiringCredential=(name,exp)=>{const auth=JSON.parse(credential(name));auth.tokens.access_token='e30.'+Buffer.from(JSON.stringify({exp})).toString('base64url')+'.sig';return JSON.stringify(auth);};
+test('access expiry uses numeric access-token exp only and never exposes raw tokens',()=>{
+ assert.equal(accessTokenExpiresAt(expiringCredential('first',1800000000)),new Date(1800000000000).toISOString());
+ for(const exp of ['1800000000',null,0,-1,1e20])assert.equal(accessTokenExpiresAt(expiringCredential('first',exp)),null);
+ assert.equal(accessTokenExpiresAt(credential('first')),null);assert.equal(accessTokenExpiresAt('invalid'),null);
+});
+test('account dates read current native credentials and refreshed saved copies without mixing identities',()=>{
+ let stateRoot;
+ return fixture(async({accounts,file,state})=>{
+  stateRoot=state;await writeFile(file,expiringCredential('first',1800000000));await accounts.importCurrent();
+  await writeFile(file,expiringCredential('first',1800000300));assert.equal((await accounts.list()).accounts[0].accessTokenExpiresAt,new Date(1800000300000).toISOString());
+  await writeFile(file,credential('second'));const id=identity(credential('first')).id;
+  assert.equal((await accounts.list()).accounts[0].accessTokenExpiresAt,new Date(1800000000000).toISOString());
+  await accounts.refresh(id);const list=await accounts.list();assert.equal(list.accounts[0].accessTokenExpiresAt,new Date(1800003600000).toISOString());assert.equal(list.accounts[0].current,false);assert.doesNotMatch(JSON.stringify(list),/secret|access_token|refresh_token|id_token/);
+ },{onBridgeClose:async home=>{assert.ok(home.startsWith(stateRoot));await writeFile(path.join(home,'auth.json'),expiringCredential('first',1800003600));}});
+});
 async function fixture(fn,options={}){const state=await mkdtemp(path.join(os.tmpdir(),'biuuka-accounts-')),native=path.join(state,'codex');await mkdir(native);const file=path.join(native,'auth.json');await writeFile(file,credential('first'));let online=true,failNative=false,loginBridge,failCleanup=false,requestHang=false,nativeHang=false,profileThrows=false;
  const bridgeFactory=home=>{const b={listeners:new Set(),account:null,close(){},async closeAndWait(){await options.onBridgeClose?.(home);this.close();},async finish(){},async initialize({requireLogin=true}={}){if(requireLogin){if(requestHang)await new Promise(()=>{});if(nativeHang&&home===native)await new Promise(()=>{});if(failNative&&home===native)throw Error('fixture failure secret');this.account={type:'chatgpt',email:identity(await readFile(path.join(home,'auth.json'),'utf8')).email};if(options.onAccountRead){this.account=(await options.onAccountRead(home,{refreshToken:false},this)).account;if(!this.account)throw Object.assign(Error('chatgpt_login_required'),{code:'chatgpt_login_required'});}}},async profile(){if(profileThrows)throw Error('profile must not run during switch');return {email:this.account.email,plan:'plus',limits:[],limitsStatus:'unavailable'};},async request(method,params){if(method==='account/read'&&options.onAccountRead)return options.onAccountRead(home,params,this);if(method==='account/read'&&requestHang)return new Promise(()=>{});if(method==='account/read')return {account:{type:'chatgpt',email:this.account.email}};if(method==='account/login/start'){loginBridge={b,home};return {authUrl:'https://auth.openai.com/authorize?fixture=true',loginId:'fixture'};}}};return b;};
  const accounts=createAccounts({...options,state,codexHome:native,bridgeFactory,online:()=>online,cleanup:async dir=>{if(failCleanup)throw Object.assign(Error('fixture locked file'),{code:'EBUSY'});await rm(dir,{recursive:true,force:true});}});try{await fn({setRequestHang:v=>requestHang=v,setNativeHang:v=>nativeHang=v,setProfileThrows:v=>profileThrows=v,setCleanupFailure:v=>failCleanup=v,accounts,state,native,file,setOnline:v=>online=v,setFail:v=>failNative=v,getLogin:()=>loginBridge});}finally{await accounts.close();await rm(state,{recursive:true,force:true});}}

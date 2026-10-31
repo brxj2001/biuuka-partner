@@ -12,6 +12,7 @@ import {createLocalProfile} from '../chatgpt/local-profile.mjs';
 import {createDesktopSwitch} from '../chatgpt/desktop-switch.mjs';
 import {createAccounts} from '../chatgpt/accounts.mjs';
 import {Records} from '../chatgpt/records.mjs';
+import {Sessions} from '../chatgpt/sessions.mjs';
 export {stateDir} from './state.mjs';
 import { createServer, VERSION } from './server.mjs';
 
@@ -40,7 +41,12 @@ export async function serve() {
   const records=new Records(stateDir);await records.recover();
   const control=await createControl({state:stateDir,config:c,appDir});
   const accounts=createAccounts({state:stateDir,codexHome:c.codexHome,desktop:createDesktopSwitch({codexHome:c.codexHome}),bridgeFactory:home=>new CodexBridge({command:c.codex,cwd:c.work,codexHome:home,timeout:360000}),online:()=>control.enabled()&&control.online()});
-  const {server,port}=await listenAvailable(port=>createServer({accounts,localProfile:createLocalProfile(c.codexHome,stateDir),control,token,port,bridgeFactory:()=>makeBridge(c),records}),c.port);
+  const {server,port}=await listenAvailable(port=>createServer({sessions:new Sessions({home:c.codexHome,state:stateDir,rebuild:async home=>{
+    if(!control.enabled()||!control.online())throw Error('network_disabled');
+    const bridge=new CodexBridge({command:c.codex,cwd:c.work,codexHome:home,timeout:30000});
+    const cancel=setInterval(()=>{if(!control.enabled()||!control.online())bridge.close('cancelled');},50);
+    try{await bridge.initialize({requireLogin:false});await bridge.request('thread/list',{limit:1,modelProviders:[]});}finally{clearInterval(cancel);await bridge.closeAndWait();}
+  }}),accounts,localProfile:createLocalProfile(c.codexHome,stateDir),control,token,port,bridgeFactory:()=>makeBridge(c),records}),c.port);
   await writePrivate(runtimeFile, { token, port, pid: process.pid, version: VERSION });
   // This runs in the install user's interactive process, including upgrades from
   // older supervisors. Never start a tray that the user deliberately exited.

@@ -15,3 +15,20 @@ for(const mode of ['complete','failed','cancelled','initialize-failed'])test('te
  }finally{server.closeAllConnections();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});}
 });
 test('legacy and crash-interrupted records do not invent account or duration',async()=>{const root=await mkdtemp(path.join(os.tmpdir(),'biuuka-record-legacy-'));try{const records=new Records(root),r=await records.begin({model:'old-model',effort:'low'});await records.recover();const old=await records.get(r.id);assert.equal(old.status,'interrupted');assert.equal(old.account,undefined);assert.equal(old.elapsedMs,undefined);}finally{await rm(root,{recursive:true,force:true});}});
+
+test('running record exposes incremental output before final persistence and keeps snapshots isolated',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'biuuka-record-live-')),records=new Records(root);let release,started;
+ const ready=new Promise(r=>started=r),hold=new Promise(r=>release=r);
+ const server=createServer({token:'fixture',refreshMs:0,records,control:{enabled:()=>true},bridgeFactory:()=>({async initialize(){},async test(_model,_effort,emit){emit({type:'delta',text:'第一段🦜'});started();await hold;emit({type:'delta',text:'第二段'});return 'fixture-thread';},async finish(){},async verifySaved(){},close(){release();}})});
+ server.listen(0,'127.0.0.1');await once(server,'listening');
+ try{
+  const execution=request(server,'/test',{model:'fixture-model',effort:'high'},true);await ready;
+  const list=(await request(server,'/control/records')).json().records;assert.equal(list[0].status,'running');assert.equal(list[0].answer,undefined);
+  const id=list[0].id,live=(await request(server,'/control/record',{id})).json();assert.equal(live.answer,'第一段🦜');assert.equal(live.status,'running');
+  const copy=await records.get(id);copy.answer='tampered';assert.equal((await records.get(id)).answer,'第一段🦜');
+  assert.equal((await new Records(root).get(id)).answer,'');
+  const active=records.active.get(id);active.status='failed';assert.equal((await records.get(id)).status,'running');active.status='running';
+  await assert.rejects(records.remove(id),{code:'record_running'});
+  release();await execution;assert.equal((await records.get(id)).status,'complete');assert.equal((await new Records(root).get(id)).answer,'第一段🦜第二段');assert.equal(records.active.size,0);
+ }finally{release();server.closeAllConnections();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});}
+});

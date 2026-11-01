@@ -17,8 +17,8 @@ unzip -q "$STAGE/package.zip" -d "$STAGE/app"
 NODE=$(command -v node || true)
 if [ -x "$HOME/.biuuka/base/runtime/selected-node/bin/node" ]; then
   mkdir -p "$STAGE/app/runtime"
-  cp -R "$HOME/.biuuka/base/runtime/selected-node" "$STAGE/app/runtime/selected-node"
-  NODE="$STAGE/app/runtime/selected-node/bin/node"
+  cp -R "$HOME/.biuuka/base/runtime/selected-node" "$STAGE/app/runtime/node"
+  NODE="$STAGE/app/runtime/node/bin/node"
 fi
 if [ -z "$NODE" ] && [ -x "$HOME/.biuuka/base/runtime/node/bin/node" ]; then NODE="$HOME/.biuuka/base/runtime/node/bin/node"; fi
 if [ "$NODE" = "$HOME/.biuuka/base/runtime/node/bin/node" ]; then

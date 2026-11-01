@@ -1,6 +1,7 @@
 'use client';
 import {useEffect,useRef,useState} from 'react';
 import {Code2,Eye} from 'lucide-react';
+import {ScorePanel} from './ScorePanel';
 import {Modal} from './ui';
 import {api,type RecordItem} from './api';
 
@@ -42,5 +43,6 @@ export function RecordViewer({record,onClose}:{record:RecordItem;onClose:()=>voi
    <button aria-pressed={view==='source'} onClick={()=>setView('source')}><Code2 size={16}/>源码 / 回答</button>
   </div><span className="muted" role="status">{label}</span></div>
   {view==='preview'&&preview?<iframe title="测试效果预览" className="result-preview" sandbox="allow-scripts" referrerPolicy="no-referrer" src="/record-preview" onLoad={e=>e.currentTarget.contentWindow?.postMessage({type:'biuuka-record-preview',source:preview},'*')}/>:<pre className="answer" ref={output} onScroll={e=>{const el=e.currentTarget;follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<48;}}><code>{shown||(running?'等待模型输出…':'没有保存的回答')}{running&&<span className="answer-cursor" aria-hidden="true">▍</span>}</code></pre>}
+  {current.status==='complete'&&['pelican','pelican-svg'].includes(current.preset)&&<ScorePanel id={current.id}/>}
  </Modal>;
 }

@@ -20,7 +20,7 @@ const resources = {
 "console.html":new URL("../web/console/generated/console.html",import.meta.url),"console-assets.json":new URL("../web/console/generated/console-assets.json",import.meta.url),"pair.html":new URL("../web/console/pair.html",import.meta.url),"pair.js":new URL("../web/console/pair.js",import.meta.url),"external-sdk.js":new URL("../web/console/external-sdk.js",import.meta.url),"index.html":new URL("../web/test/index.html",import.meta.url),"style.css":new URL("../web/test/style.css",import.meta.url),"app.js":new URL("../web/test/app.js",import.meta.url),"brand.svg":new URL("../assets/brand.svg",import.meta.url),"brand.png":new URL("../assets/brand.png",import.meta.url),"brand.ico":new URL("../assets/brand.ico",import.meta.url)
 };
 const directory = path.dirname(fileURLToPath(import.meta.url));
-export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 10000, accountRefreshMs = ACCOUNT_REFRESH_MS, records, localProfile, accounts, sessions, network = createNetwork(), control, instances = createInstanceDetector(), chatgptInstall = createChatGPTDetector() }) {
+export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 10000, accountRefreshMs = ACCOUNT_REFRESH_MS, records, localProfile, accounts, sessions, scoring, network = createNetwork(), control, instances = createInstanceDetector(), chatgptInstall = createChatGPTDetector() }) {
   const uiInstance=randomBytes(12).toString('hex');
   let consoleAssets;
   const assets=()=>consoleAssets??=(readFile(resources['console-assets.json'],'utf8').then(JSON.parse).catch(e=>{consoleAssets=null;throw e;}));
@@ -57,11 +57,11 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
     })().finally(() => { profileFlight = null; });
     return profileFlight;
   };
-  const removeRecord = id => records.remove(id, async threadId => {
+  const removeRecord = async id => {if(scoring?.idle()===false)throw Object.assign(Error(),{code:"score_busy"});await records.remove(id, async threadId => {
     const bridge=bridgeFactory();
     try { await bridge.initialize({requireLogin:false}); await bridge.deleteThread(threadId); await bridge.finish(); }
     finally { bridge.close(); }
-  });
+  });await scoring?.remove(id);};
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -156,7 +156,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
     if(req.url.startsWith('/control/')){
       if(!master||!control)return json(403,{error:'control_required'});
       if(req.method!=='POST'||req.headers['content-type']!=='application/json')return json(405,{error:'method_rejected'});
-      try{const input=await bodyJson(['/control/sessions/import','/control/sessions/preview'].includes(req.url)?90*1024*1024:req.url.startsWith('/control/sessions/')?65536:4096);
+      try{const input=await bodyJson(req.url==='/control/scoring/import'?1100000:['/control/sessions/import','/control/sessions/preview'].includes(req.url)?90*1024*1024:req.url.startsWith('/control/sessions/')?65536:4096);
         if(['/control/instances/register','/control/instances/remove'].includes(req.url)){
           const action=req.url.split('/').at(-1),keys=action==='register'?['path','kind']:['path'];
           if(!instances[action]||Object.keys(input).some(k=>!keys.includes(k)))return json(400,{error:'invalid_request'});
@@ -201,6 +201,14 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
           finally{busy=false;if(action==='switch')void refreshProfile();}
         }
         if(req.url==='/control/boundary/ack'){if(input.version!==1)return json(400,{error:'invalid_request'});await control.save({boundaryVersion:1});return json(200,{acknowledged:true});}
+        if(req.url.startsWith('/control/scoring/')){
+          if(!scoring)return json(404,{error:'scoring_unavailable'});
+          const action=req.url.slice('/control/scoring/'.length),keys={import:['svg'],list:['id'],submit:['id','provider','publicConfirmed'],refresh:['id','provider']}[action];
+          if(!keys||Object.keys(input).some(k=>!keys.includes(k)))return json(400,{error:'invalid_request'});
+          if(action==='list')return json(200,await scoring.list(input.id));
+          if(busy||draining)return json(409,{error:'busy'});
+          busy=true;try{return json(200,await scoring[action](action==='import'?input.svg:input));}catch(e){return json(409,{error:typeof e.code==='string'&&(e.code.startsWith('score_')||e.code==='network_disabled')?e.code:'score_remote_failed'});}finally{busy=false;}
+        }
         if(req.url==='/control/records')return json(200,{records:records?await records.list():[]});
         if(req.url==='/control/record'){if(!records)return json(404,{error:'records_unavailable'});return json(200,await records.get(input.id));}
         if(req.url==='/control/record/delete'){if(!records)return json(404,{error:'records_unavailable'});if(busy||draining)return json(409,{error:'busy'});busy=true;try{await removeRecord(input.id);return json(200,{deleted:true});}finally{busy=false;}}
@@ -325,7 +333,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
   });
   const networkTimer=setInterval(()=>{void refreshNetwork(true).catch(()=>{});void refreshVersion().catch(()=>{});},300000);networkTimer.unref();
   server.once('close', () => { cancelProfile?.();void accountPoll?.close().catch(()=>{});void accounts?.close(); clearInterval(networkTimer);clearInterval(timer); profileBridge?.close(); profile = null; });
-  server.canPrepareUpdate=()=>!(busy||profileFlight||retiringProfile||accountPoll?.idle()===false||accounts?.idle()===false||control?.idle?.()===false);
+  server.canPrepareUpdate=()=>!(busy||profileFlight||retiringProfile||accountPoll?.idle()===false||accounts?.idle()===false||control?.idle?.()===false||scoring?.idle()===false);
   server.prepareUpdate=()=>{if(!server.canPrepareUpdate())return false;draining=true;clearInterval(timer);void accountPoll?.close().catch(()=>{});return true;};
   return server;
 }

@@ -14,6 +14,18 @@ export function RecordViewer({record,onClose}:{record:RecordItem;onClose:()=>voi
  const answer=current.answer||'',running=current.status==='running',preview=running?null:markup(answer);
  const [view,setView]=useState<'preview'|'source'>(record.status!=='running'&&markup(answer)?'preview':'source');
  const [shown,setShown]=useState(answer),output=useRef<HTMLPreElement>(null),follow=useRef(true);
+ const frame=useRef<HTMLIFrameElement>(null),requestId=useRef('');
+ const [snapshot,setSnapshot]=useState<{svg?:string;error?:string}>({});
+ useEffect(()=>{
+  setSnapshot({});requestId.current=crypto.randomUUID();
+  const receive=(event:MessageEvent)=>{if(event.source!==frame.current?.contentWindow||event.data?.type!=='biuuka-score-snapshot'||event.data.requestId!==requestId.current)return;
+   if(typeof event.data.svg==='string'&&event.data.svg.length<=1048576)setSnapshot({svg:event.data.svg});
+   else setSnapshot({error:typeof event.data.error==='string'?event.data.error:'score_standalone_required'});
+  };
+  window.addEventListener('message',receive);
+  const timer=setTimeout(()=>setSnapshot(prior=>prior.svg||prior.error?prior:{error:'score_preview_timeout'}),10000);
+  return()=>{clearTimeout(timer);window.removeEventListener('message',receive);};
+ },[preview,current.id]);
  useEffect(()=>{
   if(!running)return;
   let stopped=false,timer:ReturnType<typeof setTimeout>;
@@ -39,10 +51,11 @@ export function RecordViewer({record,onClose}:{record:RecordItem;onClose:()=>voi
  const label=error||(running?(answer?'正在输出…':'正在运行，等待回答…'):({complete:'已完成',failed:'测试失败，保留已输出内容',cancelled:'已取消',interrupted:'测试已中断'}[current.status]||''));
  return <Modal title="测试结果" className="record-viewer" onClose={onClose}>
   <div className="result-toolbar"><div className="result-tabs" role="group" aria-label="结果视图">
-   {preview&&<button aria-pressed={view==='preview'} onClick={()=>setView('preview')}><Eye size={16}/>效果预览</button>}
+   {preview&&<button aria-pressed={view==='preview'} onClick={()=>{setView('preview');setSnapshot({});requestAnimationFrame(()=>frame.current?.contentWindow?.postMessage({type:'biuuka-record-preview',source:preview,requestId:requestId.current},'*'));}}><Eye size={16}/>效果预览</button>}
    <button aria-pressed={view==='source'} onClick={()=>setView('source')}><Code2 size={16}/>源码 / 回答</button>
   </div><span className="muted" role="status">{label}</span></div>
-  {view==='preview'&&preview?<iframe title="测试效果预览" className="result-preview" sandbox="allow-scripts" referrerPolicy="no-referrer" src="/record-preview" onLoad={e=>e.currentTarget.contentWindow?.postMessage({type:'biuuka-record-preview',source:preview},'*')}/>:<pre className="answer" ref={output} onScroll={e=>{const el=e.currentTarget;follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<48;}}><code>{shown||(running?'等待模型输出…':'没有保存的回答')}{running&&<span className="answer-cursor" aria-hidden="true">▍</span>}</code></pre>}
-  {current.status==='complete'&&['pelican','pelican-svg'].includes(current.preset)&&<ScorePanel id={current.id}/>}
+  {preview&&<iframe ref={frame} title="测试效果预览" className="result-preview" hidden={view!=='preview'} sandbox="allow-scripts" referrerPolicy="no-referrer" src="/record-preview" onLoad={e=>e.currentTarget.contentWindow?.postMessage({type:'biuuka-record-preview',source:preview,requestId:requestId.current},'*')}/>}
+  {(view==='source'||!preview)&&<pre className="answer" ref={output} onScroll={e=>{const el=e.currentTarget;follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<48;}}><code>{shown||(running?'等待模型输出…':'没有保存的回答')}{running&&<span className="answer-cursor" aria-hidden="true">▍</span>}</code></pre>}
+  {current.status==='complete'&&['pelican','pelican-svg'].includes(current.preset)&&<ScorePanel id={current.id} snapshotSvg={snapshot.svg} inputError={!preview?'score_svg_required':snapshot.error}/>}
  </Modal>;
 }

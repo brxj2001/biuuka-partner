@@ -156,7 +156,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
     if(req.url.startsWith('/control/')){
       if(!master||!control)return json(403,{error:'control_required'});
       if(req.method!=='POST'||req.headers['content-type']!=='application/json')return json(405,{error:'method_rejected'});
-      try{const input=await bodyJson(req.url==='/control/scoring/import'?1100000:['/control/sessions/import','/control/sessions/preview'].includes(req.url)?90*1024*1024:req.url.startsWith('/control/sessions/')?65536:4096);
+      try{const input=await bodyJson(['/control/scoring/import','/control/scoring/submit'].includes(req.url)?6*1024*1024:['/control/sessions/import','/control/sessions/preview'].includes(req.url)?90*1024*1024:req.url.startsWith('/control/sessions/')?65536:4096);
         if(['/control/instances/register','/control/instances/remove'].includes(req.url)){
           const action=req.url.split('/').at(-1),keys=action==='register'?['path','kind']:['path'];
           if(!instances[action]||Object.keys(input).some(k=>!keys.includes(k)))return json(400,{error:'invalid_request'});
@@ -203,7 +203,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
         if(req.url==='/control/boundary/ack'){if(input.version!==1)return json(400,{error:'invalid_request'});await control.save({boundaryVersion:1});return json(200,{acknowledged:true});}
         if(req.url.startsWith('/control/scoring/')){
           if(!scoring)return json(404,{error:'scoring_unavailable'});
-          const action=req.url.slice('/control/scoring/'.length),keys={import:['svg'],list:['id'],submit:['id','provider','publicConfirmed'],refresh:['id','provider']}[action];
+          const action=req.url.slice('/control/scoring/'.length),keys={import:['svg'],list:['id'],submit:['id','provider','publicConfirmed','snapshotSvg'],refresh:['id','provider']}[action];
           if(!keys||Object.keys(input).some(k=>!keys.includes(k)))return json(400,{error:'invalid_request'});
           if(action==='list')return json(200,await scoring.list(input.id));
           if(busy||draining)return json(409,{error:'busy'});

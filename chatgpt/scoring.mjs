@@ -13,7 +13,7 @@ export function scoringInput(answer){
  const outside=answer.slice(0,starts[0].index)+answer.slice(ends[0].index+ends[0][0].length);
  if(/<(?:style|script|canvas)\b/i.test(outside))throw error('score_standalone_required');
  if(/<(?:script|foreignObject|image)\b|<!DOCTYPE|<!ENTITY|\bon\w+\s*=|(?:href\s*=\s*["']\s*(?!#)[^"']+)|@import/i.test(svg))throw error('score_unsafe_svg');
- for(const match of svg.matchAll(/url\(\s*([^)]*)\)/gi)){const value=match[1].trim().replace(/^(["'])([\s\S]*)\1$/,'$2').trim();if(!value.startsWith('#'))throw error('score_unsafe_svg');}
+ for(const match of svg.matchAll(/url\(\s*([^)]*)\)/gi)){const value=match[1].replace(/&quot;|&#0*34;|&#x0*22;/gi,'"').replace(/&apos;|&#0*39;|&#x0*27;/gi,"'").trim().replace(/^(["'])([\s\S]*)\1$/,'$2').trim();if(!/^#[\w:.-]+$/.test(value))throw error('score_unsafe_svg');}
  return {svg,hash:createHash('sha256').update(svg).digest('hex'),inputKind:/<html\b|<!doctype html/i.test(answer)?'svg-fragment':'svg'};
 }
 const number=(x,max=100)=>typeof x==='number'&&Number.isFinite(x)&&x>=0&&x<=max?x:null;
@@ -48,16 +48,31 @@ export function createScoring({state,records,online,fetcher=fetch,selfUrl=SELF})
    if(!r.ok)throw error(r.status===429?'score_rate_limited':'score_remote_failed');let bytes=0,parts=[];for await(const chunk of r.body){bytes+=chunk.length;if(bytes>262144)throw error('score_response_invalid');parts.push(chunk);}return JSON.parse(Buffer.concat(parts).toString('utf8'));
   }finally{clearInterval(timer);}
  }
- async function input(id){const record=await records.get(id);if(!['pelican','pelican-svg'].includes(record.preset)||record.status!=='complete')throw error('score_record_not_ready');return scoringInput(record.answer);}
+ const sourceFile=id=>{file(id,'openenv');return path.join(root,id+'-source.json');};
+ async function input(id,snapshotSvg){
+  const record=await records.get(id);if(!['pelican','pelican-svg'].includes(record.preset)||record.status!=='complete')throw error('score_record_not_ready');
+  const originalHash=createHash('sha256').update(record.answer||'').digest('hex');
+  let saved;try{saved=JSON.parse(await readFile(sourceFile(id),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
+  if(saved){if(saved.originalHash!==originalHash)throw error('score_source_changed');return {...scoringInput(saved.svg),inputKind:'svg-snapshot'};}
+  // Existing scores retain their original input; never change a public submission.
+  if(await load(id,'openenv')||await load(id,'pelicanscore'))return scoringInput(record.answer);
+  if(snapshotSvg!==undefined){
+   const source=scoringInput(snapshotSvg);if(source.inputKind!=='svg')throw error('score_standalone_required');
+   await mkdir(root,{recursive:true,mode:0o700});const dest=sourceFile(id),temp=dest+'.'+randomUUID()+'.tmp';
+   await writeFile(temp,JSON.stringify({svg:source.svg,originalHash,inputKind:'svg-snapshot'}),{mode:0o600,flag:'wx'});await rename(temp,dest);
+   return {...source,inputKind:'svg-snapshot'};
+  }
+  return scoringInput(record.answer);
+ }
  return {
   idle:()=>!active,
   async import(svg){const source=scoringInput(svg);if(source.inputKind!=='svg'||/<html\b/i.test(svg))throw error('score_standalone_required');return records.put({id:randomUUID(),createdAt:new Date().toISOString(),preset:'pelican-svg',status:'complete',answer:source.svg,origin:'svg-import',threadId:null,saved:false});},
   async list(id){await records.get(id);const values=await Promise.all(['openenv','pelicanscore'].map(p=>load(id,p)));return {scores:values.filter(Boolean)};},
-  async remove(id){if(active)throw error('score_busy');await Promise.all(['openenv','pelicanscore'].map(p=>rm(file(id,p),{force:true})));},
-  async submit({id,provider,publicConfirmed}){
+  async remove(id){if(active)throw error('score_busy');await Promise.all([...['openenv','pelicanscore'].map(p=>rm(file(id,p),{force:true})),rm(sourceFile(id),{force:true})]);},
+  async submit({id,provider,publicConfirmed,snapshotSvg}){
    file(id,provider);if(provider==='pelicanscore'&&publicConfirmed!==true)throw error('score_public_confirmation_required');
    if(active)throw error('score_busy');if(!online())throw error('network_disabled');active=true;
-   try{const source=await input(id),prior=await load(id,provider);
+   try{const source=await input(id,snapshotSvg),prior=await load(id,provider);
     if(prior?.hash===source.hash)return prior; // Never resend an unknown public submission.
     let value={provider,hash:source.hash,inputKind:source.inputKind,createdAt:new Date().toISOString(),status:'submitting'};
     if(prior)throw error('score_source_changed');

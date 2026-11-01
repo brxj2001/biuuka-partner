@@ -11,3 +11,25 @@ import http from 'node:http';import{once}from'node:events';import{createServer}f
 test('scoring interfaces remain local-control only, including public upload',async()=>{let calls=0;const scoring={list:async()=>{calls++;return {scores:[]};},submit:async()=>{calls++;return {};},import:async()=>{calls++;return {};},idle:()=>true};const server=createServer({token:'fixture',refreshMs:0,control:{enabled:()=>false},scoring});server.listen(0,'127.0.0.1');await once(server,'listening');const request=(route,headers)=>new Promise((resolve,reject)=>{const req=http.request({host:'127.0.0.1',port:server.address().port,path:route,method:'POST',headers:{Host:'127.0.0.1:17322','Content-Type':'application/json',...headers}},res=>{res.resume();res.on('end',()=>resolve({status:res.statusCode,cors:res.headers['access-control-allow-origin']}));});req.on('error',reject);req.end('{}');});try{for(const action of ['list','submit','import'])for(const headers of [{},{Origin:'https://biuuka.com',Authorization:'Bearer fixture'}]){const r=await request('/control/scoring/'+action,headers);assert.notEqual(r.status,200);assert.equal(r.cors,undefined);}assert.equal(calls,0);assert.equal((await request('/control/scoring/list',{Authorization:'Bearer fixture'})).status,200);assert.equal(calls,1);}finally{server.closeAllConnections();await new Promise(r=>server.close(r));}});
 
 test('quoted local gradient references are allowed; external CSS URLs remain rejected',()=>{assert.doesNotThrow(()=>scoringInput(svg.replace('<circle','<style>.a{fill:url("#gradient")}</style><circle')));assert.throws(()=>scoringInput(svg.replace('<circle','<style>.a{fill:url("https://example.invalid/a")}</style><circle')));});
+
+test('sanitized snapshot scores styled HTML, persists identical input for both providers and retry',async()=>{
+ const calls=[];let fail=true;const f=await fixture(async(url,o)=>{calls.push(JSON.parse(o.body));if(fail){fail=false;throw Error('offline');}return url.includes('pelicanscore')?Response.json({submission:{publicId:remoteId,status:'uploaded'}}):Response.json({provider:'openenv',mode:'structure-only',judged:false,score:80});});
+ try{const record=await f.records.put({...f.record,preset:'pelican',answer:'<style>circle{fill:red}</style>'+svg});const args={id:record.id,provider:'openenv',snapshotSvg:svg};
+ await assert.rejects(f.service.submit(args),/offline/);assert.equal((await f.service.refresh(args)).inputKind,'svg-snapshot');
+ await f.service.submit({id:record.id,provider:'pelicanscore',publicConfirmed:true,snapshotSvg:svg.replace('circle','ellipse')});
+ assert.equal(calls.length,3);assert.ok(calls.every(body=>body.svg===svg));assert.equal((await f.records.get(record.id)).answer,record.answer);
+ await f.service.remove(record.id);await assert.rejects(readFile(path.join(f.state,'scores',record.id+'-source.json')),{code:'ENOENT'});
+ }finally{await f.close();}
+});
+test('snapshot validation and public confirmation happen before any upload',async()=>{
+ let calls=0;const f=await fixture(async()=>{calls++;throw Error('unexpected');});
+ try{const record=await f.records.put({...f.record,preset:'pelican',answer:'<style>circle{fill:red}</style>'+svg});
+ await assert.rejects(f.service.submit({id:record.id,provider:'pelicanscore',snapshotSvg:svg}),{code:'score_public_confirmation_required'});
+ await assert.rejects(f.service.submit({id:record.id,provider:'openenv',snapshotSvg:svg.replace('<circle','<script/><circle')}),{code:'score_unsafe_svg'});
+ assert.equal(calls,0);assert.equal((await f.service.list(record.id)).scores.length,0);
+ }finally{await f.close();}
+});
+test('XML serialized local CSS references remain local after quote decoding',()=>{
+ assert.doesNotThrow(()=>scoringInput(svg.replace('<circle','<g style="fill:url(&quot;#paint&quot;)"></g><circle')));
+ assert.throws(()=>scoringInput(svg.replace('<circle','<g style="fill:url(&quot;https://example.invalid/a&quot;)"></g><circle')),{code:'score_unsafe_svg'});
+});

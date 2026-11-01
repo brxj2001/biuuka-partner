@@ -25,3 +25,7 @@
 .test-record-meta{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 18px;margin:12px 0;font-size:13px}.test-record-meta dt{opacity:.65}.test-record-meta dd{margin:0;overflow-wrap:anywhere}.list-row:has(.test-record-meta)>div:first-child{min-width:0}
 
 .answer-cursor{color:var(--accent);animation:answer-blink 1s steps(2,start) infinite}@keyframes answer-blink{to{opacity:0}}@media(prefers-reduced-motion:reduce){.answer-cursor{animation:none}}
+.record-viewer .modal-head{position:sticky;top:-24px;z-index:2;background:var(--surface);padding:12px 0;border-bottom:1px solid var(--line)}
+.result-preview[hidden]{display:none}
+.score-panel{padding-top:20px}.score-panel>h3{margin-bottom:8px}.score-panel>p{font-size:12px;line-height:1.8}
+@media(max-width:760px){.record-viewer .modal-head{top:-18px}.score-panel .list-row{align-items:flex-start;flex-wrap:wrap}}

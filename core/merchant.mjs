@@ -12,8 +12,10 @@ export function merchant(value){
  }catch{return null;}
 }
 export function installMerchant(encoded,previous){
- if(!encoded)return merchant(previous)||DEFAULT_MERCHANT;
- if(encoded.length>4096||!/^[A-Za-z0-9_-]+$/.test(encoded))throw Error('Invalid installation source');
- const result=merchant(JSON.parse(Buffer.from(encoded,'base64url').toString('utf8')));
- if(!result)throw Error('Installation source must be a trusted HTTPS shop');return result;
+ if(!encoded)return merchant(previous)||{...DEFAULT_MERCHANT};
+ // Invalid navigation context must not prevent installation or become trusted.
+ try{
+  if(typeof encoded!=='string'||encoded.length>4096||!/^[A-Za-z0-9_-]+$/.test(encoded))return {...DEFAULT_MERCHANT};
+  return merchant(JSON.parse(Buffer.from(encoded,'base64url').toString('utf8')))||{...DEFAULT_MERCHANT};
+ }catch{return {...DEFAULT_MERCHANT};}
 }

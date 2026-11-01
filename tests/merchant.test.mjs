@@ -12,7 +12,16 @@ test('installation source retains trusted shop identity and excludes unrelated U
 test('installation source rejects shell payloads, unsafe URLs and domain impersonation',()=>{
  for(const url of ['https://biuuka.com.evil.test/','http://biuuka.com','https://biuuka.com:444/','javascript:alert(1)','https://u:p@biuuka.com','https://biuuka.com/#token'])assert.equal(merchant({name:'商城',url}),null);
  assert.equal(merchant({name:'a\nb',url:DEFAULT_MERCHANT.url}),null);
- for(const value of ['x&cmd','a'.repeat(4097),encode({name:'商城',url:'https://evil.test'})])assert.throws(()=>installMerchant(value));
+ for(const value of ['x&cmd','a'.repeat(4097),encode({name:'商城',url:'https://evil.test'})])assert.deepEqual(installMerchant(value),DEFAULT_MERCHANT);
+});
+
+test('malformed source falls back to brxj without trusting or echoing the input',()=>{
+ const previous={name:'既有店铺',url:'https://shop.biuuka.com/'};
+ for(const input of [encode(previous)+'\\','not-json',Buffer.from('{').toString('base64url'),encode(null),encode({}),encode({name:'错误来源',url:'https://biuuka.com.evil.test'}),encode({name:'错误来源',url:'http://biuuka.com'}),{},42]){
+  assert.deepEqual(installMerchant(input,previous),DEFAULT_MERCHANT);
+ }
+ assert.deepEqual(installMerchant(undefined,{name:'错误旧配置',url:'https://evil.test'}),DEFAULT_MERCHANT);
+ assert.deepEqual(installMerchant(encode(previous)),previous);
 });
 
 test('missing and historical default shop resolve to brxj while existing shops survive upgrades',()=>{

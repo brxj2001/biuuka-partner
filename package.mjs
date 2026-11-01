@@ -6,12 +6,13 @@ import { deflateRawSync, crc32 } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 const here = path.dirname(fileURLToPath(import.meta.url));
-const runtimeFiles = ['scoring.mjs','dependencies.mjs','download-sources.mjs','installation-inventory.mjs','installation-inventory.ps1','instances.mjs','instances.ps1','sessions.mjs','session-zip.mjs','release.mjs','release.json','desktop-switch.mjs','desktop-switch.ps1','desktop-window.cs','desktop-switch-macos.js','accounts.mjs','account-poll.mjs','tray-control.mjs','local-profile.mjs','uninstall.mjs','uninstall-windows.ps1','chatgpt-install.mjs','chatgpt-install.ps1','brand.svg','brand.png','brand.ico','merchant.mjs','subscription.mjs','version.mjs','tray.mjs','tray-macos.js','tray-windows.ps1','live.mjs','ports.mjs','ws.cjs','WS-LICENSE','WS-SOURCE.json','access.mjs','control.mjs','console.html','record-preview.html','record-preview.js','console-assets.json','pair.html','external-sdk.js','network.mjs','offline.mjs','state.mjs','records.mjs','update.mjs','supervisor.mjs','launcher.mjs','LICENSE','Service.cs','app.js','bridge.mjs','cli.mjs','index.html','mac-service.mjs','pair.js','run.ps1','runtime.mjs','server.mjs','setup.mjs','sources.json','style.css','windows.ps1'];
+const runtimeFiles = ['visual-result.mjs','scoring.mjs','dependencies.mjs','download-sources.mjs','installation-inventory.mjs','installation-inventory.ps1','instances.mjs','instances.ps1','sessions.mjs','session-zip.mjs','release.mjs','release.json','desktop-switch.mjs','desktop-switch.ps1','desktop-window.cs','desktop-switch-macos.js','accounts.mjs','account-poll.mjs','tray-control.mjs','local-profile.mjs','uninstall.mjs','uninstall-windows.ps1','chatgpt-install.mjs','chatgpt-install.ps1','brand.svg','brand.png','brand.ico','merchant.mjs','subscription.mjs','version.mjs','tray.mjs','tray-macos.js','tray-windows.ps1','live.mjs','ports.mjs','ws.cjs','WS-LICENSE','WS-SOURCE.json','access.mjs','control.mjs','console.html','record-preview.html','record-preview.js','console-assets.json','pair.html','external-sdk.js','network.mjs','offline.mjs','state.mjs','records.mjs','update.mjs','supervisor.mjs','launcher.mjs','LICENSE','Service.cs','app.js','bridge.mjs','cli.mjs','index.html','mac-service.mjs','pair.js','run.ps1','runtime.mjs','server.mjs','setup.mjs','sources.json','style.css','windows.ps1'];
 export const sourceFiles = {
   "dependencies.mjs": "core/dependencies.mjs",
   "download-sources.mjs": "scripts/install/download-sources.mjs",
   "installation-inventory.mjs": "chatgpt/installation-inventory.mjs",
   "installation-inventory.ps1": "chatgpt/installation-inventory.ps1",
+  "visual-result.mjs": "chatgpt/visual-result.mjs",
   "scoring.mjs": "chatgpt/scoring.mjs",
   "instances.mjs": "chatgpt/instances.mjs",
   "instances.ps1": "chatgpt/instances.ps1",

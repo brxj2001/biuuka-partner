@@ -78,7 +78,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
     const supplied=Buffer.from(req.headers.authorization||''),expected=Buffer.from(`Bearer ${token}`);
     const master=supplied.length===expected.length&&timingSafeEqual(supplied,expected)&&(local||!requestOrigin&&req.headers['sec-fetch-site']!=='cross-site');
     const grantToken=(req.headers.authorization||'').replace(/^Bearer /,'');
-    const publicRoutes=new Map([['/health','GET'],['/device/chatgpt','POST'],['/update/status','POST'],['/update/start','POST'],['/preset','GET'],['/account','POST'],['/models','POST'],['/test','POST'],['/records','POST'],['/record','POST'],['/record/delete','POST'],['/network','POST'],['/engine/start','POST'],['/notify','POST'],['/pair/start','POST'],['/pair/exchange','POST']]);
+    const publicRoutes=new Map([['/visual-score/input','POST'],['/visual-score/result','POST'],['/health','GET'],['/device/chatgpt','POST'],['/update/status','POST'],['/update/start','POST'],['/preset','GET'],['/account','POST'],['/models','POST'],['/test','POST'],['/records','POST'],['/record','POST'],['/record/delete','POST'],['/network','POST'],['/engine/start','POST'],['/notify','POST'],['/pair/start','POST'],['/pair/exchange','POST']]);
     const bodyJson=async(max=4096)=>{let size=0,parts=[];for await(const chunk of req){size+=chunk.length;if(size>max)throw Error('invalid_request');parts.push(chunk);}const body=JSON.parse(Buffer.concat(parts));if(!body||typeof body!=='object'||Array.isArray(body))throw Error('invalid_request');return body;};
     // Local console and pairing pages never grant CORS, even to first-party sites.
     if(req.method==='GET'&&['/console','/pair'].includes(url.pathname)){
@@ -97,6 +97,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
       const body=(await readFile(resources['record-preview.html'],'utf8')).replace('<script src="/record-preview.js"></script>','<script>'+receiver+'</script>');
       res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(body);return;
     }
+    if(req.url.startsWith('/visual-score/')&&requestOrigin!=='https://biuuka.com')return json(403,{error:'origin_rejected'});
     if(external){
       if(!publicRoutes.has(req.url))return json(403,{error:'scope_rejected'});
       res.setHeader('Access-Control-Allow-Origin',requestOrigin);res.setHeader('Vary','Origin');
@@ -107,6 +108,10 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
       }
       if(req.method!==publicRoutes.get(req.url))return json(405,{error:'method_rejected'});
     }else if(requestOrigin&&!local||req.headers['sec-fetch-site']==='cross-site')return json(403,{error:'origin_rejected'});
+    if(req.method==='POST'&&['/visual-score/input','/visual-score/result'].includes(req.url)){
+      if(!scoring||!online()||req.headers['content-type']!=='application/json')return json(403,{error:'network_disabled'});
+      try{const body=await bodyJson(262144);if(Object.keys(body).some(k=>!['ticket',...(req.url.endsWith('/result')?['value']:[])].includes(k)))return json(400,{error:'invalid_request'});return json(200,await (req.url.endsWith('/input')?scoring.visualInput(body):scoring.visualAccept(body)));}catch(e){return json(400,{error:e.code||'invalid_request'});}
+    }
     if(req.method==='POST'&&['/pair/start','/pair/exchange'].includes(req.url)){
       if(!external||req.headers['content-type']!=='application/json')return json(403,{error:'origin_rejected'});
       try{const body=await bodyJson();
@@ -156,7 +161,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
     if(req.url.startsWith('/control/')){
       if(!master||!control)return json(403,{error:'control_required'});
       if(req.method!=='POST'||req.headers['content-type']!=='application/json')return json(405,{error:'method_rejected'});
-      try{const input=await bodyJson(['/control/scoring/import','/control/scoring/submit','/control/scoring/export'].includes(req.url)?6*1024*1024:['/control/sessions/import','/control/sessions/preview'].includes(req.url)?90*1024*1024:req.url.startsWith('/control/sessions/')?65536:4096);
+      try{const input=await bodyJson(['/control/scoring/import','/control/scoring/submit','/control/scoring/export','/control/scoring/visualStart'].includes(req.url)?6*1024*1024:['/control/sessions/import','/control/sessions/preview'].includes(req.url)?90*1024*1024:req.url.startsWith('/control/sessions/')?65536:4096);
         if(['/control/instances/register','/control/instances/remove'].includes(req.url)){
           const action=req.url.split('/').at(-1),keys=action==='register'?['path','kind']:['path'];
           if(!instances[action]||Object.keys(input).some(k=>!keys.includes(k)))return json(400,{error:'invalid_request'});
@@ -203,7 +208,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
         if(req.url==='/control/boundary/ack'){if(input.version!==1)return json(400,{error:'invalid_request'});await control.save({boundaryVersion:1});return json(200,{acknowledged:true});}
         if(req.url.startsWith('/control/scoring/')){
           if(!scoring)return json(404,{error:'scoring_unavailable'});
-          const action=req.url.slice('/control/scoring/'.length),keys={connection:[],export:['id','snapshotSvg'],import:['svg'],list:['id'],submit:['id','provider','publicConfirmed','snapshotSvg','retryConfirmed'],refresh:['id','provider']}[action];
+          const action=req.url.slice('/control/scoring/'.length),keys={visualStart:['id','snapshotSvg'],connection:[],export:['id','snapshotSvg'],import:['svg'],list:['id'],submit:['id','provider','publicConfirmed','snapshotSvg','retryConfirmed'],refresh:['id','provider']}[action];
           if(!keys||Object.keys(input).some(k=>!keys.includes(k)))return json(400,{error:'invalid_request'});
           if(action==='list')return json(200,await scoring.list(input.id));
           if(busy||draining)return json(409,{error:'busy'});

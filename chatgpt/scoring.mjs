@@ -1,5 +1,6 @@
+import {visualResult} from './visual-result.mjs';
 import {mkdir,readFile,writeFile,rename,rm} from 'node:fs/promises';
-import path from 'node:path';import {createHash,randomUUID} from 'node:crypto';
+import path from 'node:path';import {createHash,randomUUID,randomBytes} from 'node:crypto';
 const PUBLIC='https://pelicanscore.com';
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const error=code=>Object.assign(Error(code),{code});
@@ -35,8 +36,8 @@ function publicResult(s){
  return {...result,score,maxScore:100,mode:'third-party',machineScore:number(s.machineScore,20),visionScore:number(s.visionScore,80),details,feedback:text(s.judgeResult?.summary),version:text(s.scoringVersion),judge:text(s.judgeModel),judgePromptVersion:text(s.judgePromptVersion)};
 }
 export function createScoring({state,records,online,fetcher=fetch,now=Date.now}){
- const root=path.join(state,'scores');let active=false;
- const file=(id,p)=>{if(!uuid.test(id)||!['openenv','pelicanscore'].includes(p))throw error('score_input_invalid');return path.join(root,id+'-'+p+'.json');};
+ const root=path.join(state,'scores');let active=false;const visualTickets=new Map();
+ const file=(id,p)=>{if(!uuid.test(id)||!['openenv','openenv-vision','pelicanscore'].includes(p))throw error('score_input_invalid');return path.join(root,id+'-'+p+'.json');};
  const load=async(id,p)=>{try{return JSON.parse(await readFile(file(id,p),'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
  const save=async(id,p,value)=>{await mkdir(root,{recursive:true,mode:0o700});const dest=file(id,p),temp=dest+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(value),{mode:0o600,flag:'wx'});await rename(temp,dest);return value;};
  const cooldownFile=path.join(root,'pelicanscore-cooldown.json');
@@ -68,7 +69,7 @@ export function createScoring({state,records,online,fetcher=fetch,now=Date.now})
   let saved;try{saved=JSON.parse(await readFile(sourceFile(id),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
   if(saved){if(saved.originalHash!==originalHash)throw error('score_source_changed');return {...scoringInput(saved.svg),inputKind:'svg-snapshot'};}
   // Existing scores retain their original input; never change a public submission.
-  if(await load(id,'openenv')||await load(id,'pelicanscore'))return scoringInput(record.answer);
+  if(await load(id,'openenv')||await load(id,'openenv-vision')||await load(id,'pelicanscore'))return scoringInput(record.answer);
   if(snapshotSvg!==undefined){
    const source=scoringInput(snapshotSvg);if(source.inputKind!=='svg')throw error('score_standalone_required');
    await mkdir(root,{recursive:true,mode:0o700});const dest=sourceFile(id),temp=dest+'.'+randomUUID()+'.tmp';
@@ -78,6 +79,28 @@ export function createScoring({state,records,online,fetcher=fetch,now=Date.now})
   return scoringInput(record.answer);
  }
  return {
+  async visualStart({id,snapshotSvg}){
+   if(!online())throw error('network_disabled');if(active)throw error('score_busy');active=true;
+   try{const source=await input(id,snapshotSvg),prior=await load(id,'openenv-vision');
+    if(prior&&prior.hash!==source.hash)throw error('score_source_changed');
+    const requestKey=prior?.requestKey||randomUUID();
+    const value=prior||{provider:'openenv-vision',hash:source.hash,inputKind:source.inputKind,requestKey,status:'pending',createdAt:new Date().toISOString()};
+    await save(id,'openenv-vision',value);
+    for(const [k,t]of visualTickets)if(t.expiresAt<now()||t.id===id)visualTickets.delete(k);
+    if(visualTickets.size>=20)throw error('score_busy');
+    const ticket=randomBytes(32).toString('hex');visualTickets.set(ticket,{id,requestKey,svg:source.svg,expiresAt:now()+15*60*1000});return {ticket};
+   }finally{active=false;}
+  },
+  async visualInput({ticket}){if(!online())throw error('network_disabled');const t=visualTickets.get(ticket);if(!t||t.expiresAt<=now())throw error('score_ticket_expired');return {requestKey:t.requestKey,svg:t.svg};},
+  async visualAccept({ticket,value}){
+   if(active)throw error('score_busy');active=true;try{
+   if(!online())throw error('network_disabled');const t=visualTickets.get(ticket);if(!t||t.expiresAt<=now()||value?.requestKey!==t.requestKey)throw error('score_ticket_expired');
+   const prior=await load(t.id,'openenv-vision');if(!prior||prior.requestKey!==t.requestKey)throw error('score_ticket_expired');
+   if(prior.status==='completed')return {saved:true};
+   let projection;if(value.status==='completed')projection=visualResult(value.result);else if(['pending','unknown','failed','rejected','expired'].includes(value.status))projection={status:value.status==='rejected'?'failed':value.status,message:text(value.message)};else throw error('score_response_invalid');
+   await save(t.id,'openenv-vision',{...prior,...projection,checkedAt:new Date().toISOString()});return {saved:true};
+   }finally{active=false;}
+  },
   idle:()=>!active,
   async connection(){
    if(!online())throw error('network_disabled');if(active)throw error('score_busy');active=true;
@@ -87,10 +110,10 @@ export function createScoring({state,records,online,fetcher=fetch,now=Date.now})
   },
   async export({id,snapshotSvg}){if(active)throw error('score_busy');active=true;try{return {svg:(await input(id,snapshotSvg)).svg};}finally{active=false;}},
   async import(svg){const source=scoringInput(svg);if(source.inputKind!=='svg'||/<html\b/i.test(svg))throw error('score_standalone_required');return records.put({id:randomUUID(),createdAt:new Date().toISOString(),preset:'pelican-svg',status:'complete',answer:source.svg,origin:'svg-import',threadId:null,saved:false});},
-  async list(id){await records.get(id);const values=await Promise.all(['openenv','pelicanscore'].map(p=>load(id,p)));return {scores:values.filter(Boolean).map(s=>s.status==='unknown'&&s.httpStatus===429?{...s,status:'rate_limited'}:s),cooldowns:await cooldowns()};},
-  async remove(id){if(active)throw error('score_busy');await Promise.all([...['openenv','pelicanscore'].map(p=>rm(file(id,p),{force:true})),rm(sourceFile(id),{force:true})]);},
+  async list(id){await records.get(id);const values=await Promise.all(['openenv','openenv-vision','pelicanscore'].map(p=>load(id,p)));return {scores:values.filter(Boolean).map(s=>s.status==='unknown'&&s.httpStatus===429?{...s,status:'rate_limited'}:s),cooldowns:await cooldowns()};},
+  async remove(id){if(active)throw error('score_busy');for(const [key,t]of visualTickets)if(t.id===id)visualTickets.delete(key);await Promise.all([...['openenv','openenv-vision','pelicanscore'].map(p=>rm(file(id,p),{force:true})),rm(sourceFile(id),{force:true})]);},
   async submit({id,provider,publicConfirmed,snapshotSvg,retryConfirmed}){
-   file(id,provider);if(provider==='openenv')throw error('score_provider_retired');if(provider==='pelicanscore'&&publicConfirmed!==true)throw error('score_public_confirmation_required');
+   file(id,provider);if(provider!=='pelicanscore')throw error('score_provider_retired');if(provider==='pelicanscore'&&publicConfirmed!==true)throw error('score_public_confirmation_required');
    if(active)throw error('score_busy');if(!online())throw error('network_disabled');active=true;
    try{const source=await input(id,snapshotSvg),prior=await load(id,provider);
     if(prior&&prior.hash!==source.hash)throw error('score_source_changed');

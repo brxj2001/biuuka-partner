@@ -55,3 +55,24 @@ test('query 429 preserves remote task and stops requests across refreshes',async
  let calls=0;const f=await fixture(async()=>++calls===1?Response.json({submission:{publicId:remoteId,status:'uploaded'}}):new Response('',{status:429,headers:{'Retry-After':'120'}}));
  try{const args={id:f.record.id,provider:'pelicanscore',publicConfirmed:true};await f.service.submit(args);await assert.rejects(f.service.refresh(args),{code:'score_rate_limited'});await assert.rejects(f.service.refresh(args),{code:'score_rate_limited'});assert.equal(calls,2);const list=await f.service.list(args.id);assert.equal(list.scores[0].remoteId,remoteId);assert.equal(list.scores[0].status,'pending');assert(list.cooldowns.query);assert(!list.cooldowns.submit);}finally{await f.close();}
 });
+
+test('visual handoff is scoped, expires, survives a new ticket without replay, and cannot regress completion',async()=>{
+ let time=0;const f=await fixture(()=>{throw Error('must not call third party');},{now:()=>time});try{
+ const first=await f.service.visualStart({id:f.record.id});const input=await f.service.visualInput(first);
+ assert.equal(input.svg,svg);assert.deepEqual(Object.keys(input).sort(),['requestKey','svg']);
+ await assert.rejects(f.service.visualInput({ticket:'forged'}),{code:'score_ticket_expired'});
+ const second=await f.service.visualStart({id:f.record.id});assert.equal((await f.service.visualInput(second)).requestKey,input.requestKey);
+ await assert.rejects(f.service.visualInput(first),{code:'score_ticket_expired'});
+ await assert.rejects(f.service.visualAccept({...second,value:{requestKey:remoteId,status:'pending'}}),{code:'score_ticket_expired'});
+ const checklist=Object.fromEntries(['subject_recognisable','vehicle_recognisable','riding_posture','coherent_figure','subject_feature_0','subject_feature_1','vehicle_feature_0','vehicle_feature_1','vehicle_feature_2'].map(k=>[k,true]));
+ await f.service.visualAccept({...second,value:{requestKey:input.requestKey,status:'completed',result:{mode:'vision',judged:true,gatePassed:true,score:100,breakdown:{judged:true,structure_score:1,semantic_score:1,judge:{checklist,caption:'fixture'}}}}});
+ await f.service.visualAccept({...second,value:{requestKey:input.requestKey,status:'pending'}});assert.equal((await f.service.list(f.record.id)).scores[0].status,'completed');
+ time=900001;await assert.rejects(f.service.visualInput(second),{code:'score_ticket_expired'});
+ const third=await f.service.visualStart({id:f.record.id});f.offline();await assert.rejects(f.service.visualInput(third),{code:'network_disabled'});
+ }finally{await f.close();}
+});
+test('visual bridge accepts only exact mall origin and explicit ticket, never broad control',async()=>{
+ const f=await fixture(()=>{throw Error('no remote');});const ticket=await f.service.visualStart({id:f.record.id});const server=createServer({token:'fixture',refreshMs:0,control:{enabled:()=>true,networkEnabled:()=>true},scoring:f.service});server.listen(0,'127.0.0.1');await once(server,'listening');
+ async function send(origin,body){return new Promise((resolve,reject)=>{const req=http.request({host:'127.0.0.1',port:server.address().port,path:'/visual-score/input',method:'POST',headers:{Host:'127.0.0.1:17322','Content-Type':'application/json',...(origin?{Origin:origin}:{})}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});req.on('error',reject);req.end(JSON.stringify(body));});}
+ try{for(const origin of [undefined,'https://evil.invalid','https://biuuka.com.evil.invalid','https://shop.biuuka.com'])assert.equal(await send(origin,ticket),403);assert.equal(await send('https://biuuka.com',{ticket:'bad'}),400);assert.equal(await send('https://biuuka.com',{...ticket,id:f.record.id}),400);assert.equal(await send('https://biuuka.com',ticket),200);await f.service.remove(f.record.id);await assert.rejects(f.service.visualInput(ticket),{code:'score_ticket_expired'});}finally{server.closeAllConnections();await new Promise(r=>server.close(r));await f.close();}
+});

@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $Count = 0
-$SourcePaths = @{'github-install.ps1'='../scripts/install/github-install.ps1';'desktop-switch.ps1'='../chatgpt/desktop-switch.ps1';'chatgpt-install.ps1'='../chatgpt/chatgpt-install.ps1';'tray-windows.ps1'='../tray/tray-windows.ps1';'windows.ps1'='../scripts/install/windows.ps1';'run.ps1'='../scripts/install/run.ps1';'uninstall-windows.ps1'='../scripts/install/uninstall-windows.ps1'}
-foreach ($Name in @('github-install.ps1','windows.ps1','run.ps1','tray-windows.ps1','chatgpt-install.ps1','uninstall-windows.ps1','desktop-switch.ps1')) {
+$SourcePaths = @{'instances.ps1'='../chatgpt/instances.ps1';'github-install.ps1'='../scripts/install/github-install.ps1';'desktop-switch.ps1'='../chatgpt/desktop-switch.ps1';'chatgpt-install.ps1'='../chatgpt/chatgpt-install.ps1';'tray-windows.ps1'='../tray/tray-windows.ps1';'windows.ps1'='../scripts/install/windows.ps1';'run.ps1'='../scripts/install/run.ps1';'uninstall-windows.ps1'='../scripts/install/uninstall-windows.ps1'}
+foreach ($Name in @('instances.ps1','github-install.ps1','windows.ps1','run.ps1','tray-windows.ps1','chatgpt-install.ps1','uninstall-windows.ps1','desktop-switch.ps1')) {
     $Tokens = $null; $Errors = $null
     $Ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $SourcePaths[$Name]), [ref]$Tokens, [ref]$Errors)
     if ($Errors.Count) { throw ($Errors | Out-String) }; $Count++

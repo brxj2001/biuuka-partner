@@ -1,3 +1,4 @@
+import {createInstanceDetector} from '../chatgpt/instances.mjs';
 import {VERSION} from '../release.mjs';
 import http from 'node:http';
 import {readSubscription} from '../chatgpt/subscription.mjs';
@@ -19,7 +20,7 @@ const resources = {
 "console.html":new URL("../web/console/generated/console.html",import.meta.url),"console-assets.json":new URL("../web/console/generated/console-assets.json",import.meta.url),"pair.html":new URL("../web/console/pair.html",import.meta.url),"pair.js":new URL("../web/console/pair.js",import.meta.url),"external-sdk.js":new URL("../web/console/external-sdk.js",import.meta.url),"index.html":new URL("../web/test/index.html",import.meta.url),"style.css":new URL("../web/test/style.css",import.meta.url),"app.js":new URL("../web/test/app.js",import.meta.url),"brand.svg":new URL("../assets/brand.svg",import.meta.url),"brand.png":new URL("../assets/brand.png",import.meta.url),"brand.ico":new URL("../assets/brand.ico",import.meta.url)
 };
 const directory = path.dirname(fileURLToPath(import.meta.url));
-export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 10000, accountRefreshMs = ACCOUNT_REFRESH_MS, records, localProfile, accounts, sessions, network = createNetwork(), control, chatgptInstall = createChatGPTDetector() }) {
+export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 10000, accountRefreshMs = ACCOUNT_REFRESH_MS, records, localProfile, accounts, sessions, network = createNetwork(), control, instances = createInstanceDetector(), chatgptInstall = createChatGPTDetector() }) {
   const uiInstance=randomBytes(12).toString('hex');
   let consoleAssets;
   const assets=()=>consoleAssets??=(readFile(resources['console-assets.json'],'utf8').then(JSON.parse).catch(e=>{consoleAssets=null;throw e;}));
@@ -156,6 +157,10 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
       if(!master||!control)return json(403,{error:'control_required'});
       if(req.method!=='POST'||req.headers['content-type']!=='application/json')return json(405,{error:'method_rejected'});
       try{const input=await bodyJson(['/control/sessions/import','/control/sessions/preview'].includes(req.url)?90*1024*1024:req.url.startsWith('/control/sessions/')?65536:4096);
+        if(req.url==='/control/instances/list'){
+          if(Object.keys(input).length)return json(400,{error:'invalid_request'});
+          return json(200,await instances());
+        }
         if(req.url.startsWith('/control/sessions/')){
           if(!sessions)return json(404,{error:'会话管理不可用。'});
           const action=req.url.slice('/control/sessions/'.length),keys={list:[],read:['key'],export:['keys'],preview:['data','target'],import:['data','target'],copy:['keys','target'],trash:['keys'],restore:['ids'],purge:['ids'],trashed:[],repair:['target'],instance:['name','home']}[action];

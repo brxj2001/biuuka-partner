@@ -3,6 +3,11 @@ import path from 'node:path';import {createHash,randomUUID} from 'node:crypto';
 const PUBLIC='https://pelicanscore.com';
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const error=code=>Object.assign(Error(code),{code});
+function transportError(e){
+ if(e.code?.startsWith('score_')||e.code==='network_disabled')return e;
+ const code=e.cause?.code||e.code||e.name;
+ return error(['ENOTFOUND','EAI_AGAIN'].includes(code)?'score_dns_failed':['CERT_HAS_EXPIRED','DEPTH_ZERO_SELF_SIGNED_CERT','UNABLE_TO_VERIFY_LEAF_SIGNATURE','SELF_SIGNED_CERT_IN_CHAIN'].includes(code)?'score_tls_failed':['TimeoutError','UND_ERR_CONNECT_TIMEOUT','ETIMEDOUT'].includes(code)?'score_timeout':'score_connection_failed');
+}
 export function scoringInput(answer){
  if(typeof answer!=='string'||Buffer.byteLength(answer)>2*1024*1024)throw error('score_input_invalid');
  const starts=[...answer.matchAll(/<svg\b/gi)],ends=[...answer.matchAll(/<\/svg\s*>/gi)];
@@ -20,7 +25,7 @@ const number=(x,max=100)=>typeof x==='number'&&Number.isFinite(x)&&x>=0&&x<=max?
 const text=x=>typeof x==='string'?x.slice(0,2000):'';
 function publicResult(s){
  if(!s||!uuid.test(s.publicId))throw error('score_response_invalid');
- const result={remoteId:s.publicId,resultUrl:PUBLIC+'/result/'+s.publicId,status:['completed','failed'].includes(s.status)?s.status:'pending'};
+ const result={remoteId:s.publicId,resultUrl:PUBLIC+'/result/'+s.publicId,status:['completed','failed'].includes(s.status)?s.status:'pending',message:'',errorCode:'',httpStatus:null};
  if(result.status==='failed')return {...result,machineScore:number(s.machineScore,20),judge:text(s.judgeModel),errorCode:text(s.errorCode),message:s.errorCode==='INVALID_JUDGE_RESPONSE'?'第三方视觉评委返回了无效分数，未生成总分。作品已上传，刷新只查询原任务，不会重复发布。':text(s.errorMessage)||'第三方评分失败'};
  if(result.status!=='completed')return result;
  if(s.isMock===true||s.renderNeedsReview===true)return {...result,status:'unverified',message:'第三方返回模拟评分或待复核结果，未作为正式分数。'};
@@ -38,7 +43,8 @@ export function createScoring({state,records,online,fetcher=fetch}){
   if(!online())throw error('network_disabled');
   const abort=new AbortController(),timer=setInterval(()=>{if(!online())abort.abort();},200);
   try{const r=await fetcher(url,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),redirect:'error',signal:AbortSignal.any([abort.signal,AbortSignal.timeout(30000)])});
-   if(!r.ok)throw error(r.status===429?'score_rate_limited':'score_remote_failed');let bytes=0,parts=[];for await(const chunk of r.body){bytes+=chunk.length;if(bytes>262144)throw error('score_response_invalid');parts.push(chunk);}return JSON.parse(Buffer.concat(parts).toString('utf8'));
+   if(!r.ok){await r.body?.cancel();throw Object.assign(error(r.status===429?'score_rate_limited':r.status===403?'score_access_denied':r.status===413?'score_too_large':r.status>=500?'score_remote_failed':'score_http_rejected'),{httpStatus:r.status});}let bytes=0,parts=[];for await(const chunk of r.body){bytes+=chunk.length;if(bytes>262144)throw error('score_response_invalid');parts.push(chunk);}try{return JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{throw error('score_response_invalid');}
+  }catch(e){if(!online())throw error('network_disabled');throw transportError(e);
   }finally{clearInterval(timer);}
  }
  const sourceFile=id=>{file(id,'openenv');return path.join(root,id+'-source.json');};
@@ -59,21 +65,31 @@ export function createScoring({state,records,online,fetcher=fetch}){
  }
  return {
   idle:()=>!active,
+  async connection(){
+   if(!online())throw error('network_disabled');if(active)throw error('score_busy');active=true;
+   const abort=new AbortController(),timer=setInterval(()=>{if(!online())abort.abort();},200),started=Date.now();
+   try{const r=await fetcher(PUBLIC+'/score',{method:'GET',redirect:'error',signal:AbortSignal.any([abort.signal,AbortSignal.timeout(12000)])});await r.body?.cancel();return {reachable:r.ok,httpStatus:r.status,elapsedMs:Date.now()-started};}
+   catch(e){if(!online())throw error('network_disabled');throw transportError(e);}finally{clearInterval(timer);active=false;}
+  },
+  async export({id,snapshotSvg}){if(active)throw error('score_busy');active=true;try{return {svg:(await input(id,snapshotSvg)).svg};}finally{active=false;}},
   async import(svg){const source=scoringInput(svg);if(source.inputKind!=='svg'||/<html\b/i.test(svg))throw error('score_standalone_required');return records.put({id:randomUUID(),createdAt:new Date().toISOString(),preset:'pelican-svg',status:'complete',answer:source.svg,origin:'svg-import',threadId:null,saved:false});},
   async list(id){await records.get(id);const values=await Promise.all(['openenv','pelicanscore'].map(p=>load(id,p)));return {scores:values.filter(Boolean)};},
   async remove(id){if(active)throw error('score_busy');await Promise.all([...['openenv','pelicanscore'].map(p=>rm(file(id,p),{force:true})),rm(sourceFile(id),{force:true})]);},
-  async submit({id,provider,publicConfirmed,snapshotSvg}){
+  async submit({id,provider,publicConfirmed,snapshotSvg,retryConfirmed}){
    file(id,provider);if(provider==='openenv')throw error('score_provider_retired');if(provider==='pelicanscore'&&publicConfirmed!==true)throw error('score_public_confirmation_required');
    if(active)throw error('score_busy');if(!online())throw error('network_disabled');active=true;
    try{const source=await input(id,snapshotSvg),prior=await load(id,provider);
-    if(prior?.hash===source.hash)return prior; // Never resend an unknown public submission.
+    if(prior&&prior.hash!==source.hash)throw error('score_source_changed');
+    if(prior&&retryConfirmed!==true)return prior; // Never automatically resend an unknown submission.
+    if(prior&&!['unknown','submitting','failed'].includes(prior.status))throw error('score_retry_not_allowed');
+    if((prior?.attempts?.length||0)>=20)throw error('score_retry_limit');
     let value={provider,hash:source.hash,inputKind:source.inputKind,createdAt:new Date().toISOString(),status:'submitting'};
-    if(prior)throw error('score_source_changed');
+    if(prior){const {attempts=[],...previous}=prior;value.attempts=[...attempts,previous];}
     await save(id,provider,value);
     try{
      {const response=await request(PUBLIC+'/api/v1/submissions',{svg:source.svg});value={...value,...publicResult(response.submission)};}
      value.checkedAt=new Date().toISOString();return await save(id,provider,value);
-    }catch(e){await save(id,provider,{...value,status:provider==='pelicanscore'?'unknown':'failed',message:e.code||'score_remote_failed'});throw e;}
+    }catch(e){await save(id,provider,{...value,status:'unknown',message:e.code||'score_remote_failed',...(e.httpStatus?{httpStatus:e.httpStatus}:{}),checkedAt:new Date().toISOString()});throw e;}
    }finally{active=false;}
   },
   async refresh({id,provider}){

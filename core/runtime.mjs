@@ -1,3 +1,4 @@
+import {createInstallationInventory} from '../chatgpt/installation-inventory.mjs';
 import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -41,7 +42,7 @@ export async function serve() {
   const records=new Records(stateDir);await records.recover();
   const control=await createControl({state:stateDir,config:c,appDir});
   const accounts=createAccounts({state:stateDir,codexHome:c.codexHome,desktop:createDesktopSwitch({codexHome:c.codexHome}),bridgeFactory:home=>new CodexBridge({command:c.codex,cwd:c.work,codexHome:home,timeout:360000}),online:()=>control.enabled()&&control.online()});
-  const {server,port}=await listenAvailable(port=>createServer({sessions:new Sessions({home:c.codexHome,state:stateDir,rebuild:async home=>{
+  const {server,port}=await listenAvailable(port=>createServer({instances:createInstallationInventory({state:stateDir,codex:c.codex}),sessions:new Sessions({home:c.codexHome,state:stateDir,rebuild:async home=>{
     if(!control.enabled()||!control.online())throw Error('network_disabled');
     const bridge=new CodexBridge({command:c.codex,cwd:c.work,codexHome:home,timeout:30000});
     const cancel=setInterval(()=>{if(!control.enabled()||!control.online())bridge.close('cancelled');},50);

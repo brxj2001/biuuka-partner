@@ -157,6 +157,11 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
       if(!master||!control)return json(403,{error:'control_required'});
       if(req.method!=='POST'||req.headers['content-type']!=='application/json')return json(405,{error:'method_rejected'});
       try{const input=await bodyJson(['/control/sessions/import','/control/sessions/preview'].includes(req.url)?90*1024*1024:req.url.startsWith('/control/sessions/')?65536:4096);
+        if(['/control/instances/register','/control/instances/remove'].includes(req.url)){
+          const action=req.url.split('/').at(-1),keys=action==='register'?['path','kind']:['path'];
+          if(!instances[action]||Object.keys(input).some(k=>!keys.includes(k)))return json(400,{error:'invalid_request'});
+          try{return json(200,await instances[action](input));}catch{return json(409,{error:'登记未完成，请核对已有程序的绝对路径及类型；不会启动或删除程序。'});}
+        }
         if(req.url==='/control/instances/list'){
           if(Object.keys(input).length)return json(400,{error:'invalid_request'});
           return json(200,await instances());

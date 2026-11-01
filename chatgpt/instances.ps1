@@ -30,6 +30,6 @@ $rows=@(Get-CimInstance Win32_Process -Filter ("SessionId = " + $session) -Prope
    elseif($owner.Sid -eq $sid){$kind=$files[$exe];$label=[IO.Path]::GetFileNameWithoutExtension($exe)}
   }
  }elseif($named){$partial=$true}
- [pscustomobject]@{pid=[int]$p.ProcessId;parent=[int]$p.ParentProcessId;kind=$kind;name=$label}
+ [pscustomobject]@{pid=[int]$p.ProcessId;parent=[int]$p.ParentProcessId;kind=$kind;name=$label;exe=$(if($kind){$p.ExecutablePath}else{$null})}
 })
 [Console]::WriteLine((ConvertTo-Json -InputObject @{rows=$rows;partial=$partial} -Depth 4 -Compress))

@@ -12,7 +12,8 @@ export function scoringInput(answer){
  // Never silently treat CSS/canvas HTML as a comparable standalone SVG.
  const outside=answer.slice(0,starts[0].index)+answer.slice(ends[0].index+ends[0][0].length);
  if(/<(?:style|script|canvas)\b/i.test(outside))throw error('score_standalone_required');
- if(/<(?:script|foreignObject|image)\b|<!DOCTYPE|<!ENTITY|\bon\w+\s*=|(?:href\s*=\s*["']\s*(?!#)[^"']+)|@import|url\(\s*["']?(?!#)/i.test(svg))throw error('score_unsafe_svg');
+ if(/<(?:script|foreignObject|image)\b|<!DOCTYPE|<!ENTITY|\bon\w+\s*=|(?:href\s*=\s*["']\s*(?!#)[^"']+)|@import/i.test(svg))throw error('score_unsafe_svg');
+ for(const match of svg.matchAll(/url\(\s*([^)]*)\)/gi)){const value=match[1].trim().replace(/^(["'])([\s\S]*)\1$/,'$2').trim();if(!value.startsWith('#'))throw error('score_unsafe_svg');}
  return {svg,hash:createHash('sha256').update(svg).digest('hex'),inputKind:/<html\b|<!doctype html/i.test(answer)?'svg-fragment':'svg'};
 }
 const number=(x,max=100)=>typeof x==='number'&&Number.isFinite(x)&&x>=0&&x<=max?x:null;
@@ -30,8 +31,10 @@ function publicResult(s){
 }
 function structuralResult(s){
  if(s?.provider!=='openenv'||s.mode!=='structure-only'||s.judged!==false||number(s.score)===null)throw error('score_response_invalid');
- const checks=s.breakdown?.structure?.checks;
- return {status:'completed',mode:'structure-only',judged:false,score:s.score,maxScore:100,version:text(s.version),feedback:text(s.feedback),gatePassed:s.gatePassed===true,details:Array.isArray(checks)?checks.slice(0,30).map(c=>({name:text(c.name),passed:c.passed===true,reason:text(c.detail||c.reason)})):[]};
+ const structure=s.breakdown?.structure,checks=structure?.checks;
+ const labels={wheel_count:'车轮数量',wheels_similar_size:'车轮大小相近',wheels_level:'车轮水平对齐',wheels_apart:'车轮间距',frame_spans_wheels:'车架连接车轮',rider_present:'骑乘者形状',rider_proportionate:'骑乘者比例'};
+ const details=checks&&typeof checks==='object'&&!Array.isArray(checks)?Object.entries(checks).slice(0,30).map(([name,passed])=>({name:labels[name]||text(name),passed:passed===true,reason:text(structure.details?.[name])})):[];
+ return {status:'completed',mode:'structure-only',judged:false,score:s.score,maxScore:100,version:text(s.version),feedback:text(s.feedback),gatePassed:s.gatePassed===true,details};
 }
 export function createScoring({state,records,online,fetcher=fetch,selfUrl=SELF}){
  const root=path.join(state,'scores');let active=false;

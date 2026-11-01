@@ -39,7 +39,37 @@ export class Sessions {
  async addInstance(name,home){if(typeof name!=='string'||!name.trim()||name.length>80||typeof home!=='string'||!path.isAbsolute(home))fail('请填写实例名称和绝对路径。');const root=await realpath(home),all=await this.instances();if(all.some(x=>x.home===root))fail('这个实例已登记。');if(!(await exists(path.join(root,'sessions')))&&!(await exists(path.join(root,'session_index.jsonl'))))fail('该目录不是已有 Codex 数据目录。');const value={id:randomUUID(),name:name.trim(),home:root};await atomic(await safe(this.root,'instances.json'),[...all.slice(1),value]);return value;}
  async database(root,readonly=true){const files=(await readdir(root)).filter(n=>/^state_\d+\.sqlite$/.test(n)).sort((a,b)=>Number(b.match(/\d+/)[0])-Number(a.match(/\d+/)[0]));if(!files.length)return null;const file=await safe(root,files[0]);const db=new DatabaseSync(file,{readOnly:readonly});db.exec('PRAGMA busy_timeout=3000');return db;}
  async scan(instance){const root=instance.home,entries=new Map(),records=[],warnings=[];try{const text=await readFile(await safe(root,'session_index.jsonl'),'utf8');if(Buffer.byteLength(text)>MAX)fail('会话索引过大。');for(const line of text.split('\n'))try{const v=JSON.parse(line);if(UUID.test(v.id))entries.set(v.id,v);}catch{}}catch(e){if(e.code!=='ENOENT')warnings.push('部分会话索引无法读取');}
- let db;try{db=await this.database(root);if(db){for(const row of db.prepare('SELECT id,title,cwd FROM threads').all()){const old=entries.get(row.id)||{};entries.set(row.id,{...old,thread_name:row.title||old.thread_name,cwd:row.cwd});}}}catch{warnings.push('官方索引暂不可读，已使用会话文件');}finally{db?.close();}
+ // New desktop catalogs and threads.name carry display names; threads.title may be the first message.
+ const names=new Map(),catalog=new Map(),legacy=new Map();
+ for(const directory of ['sqlite','']){
+  let files;try{files=await readdir(directory?await safe(root,directory):root);}catch(e){if(e.code!=='ENOENT')warnings.push('部分标题目录无法读取');continue;}
+  files=files.filter(n=>directory?/\.(?:sqlite|db)$/i.test(n):/^state_\d+\.sqlite$/.test(n)).sort((a,b)=>b.localeCompare(a,undefined,{numeric:true}));
+  if(files.length>64){warnings.push('标题数据库过多，部分名称未读取');files=files.slice(0,64);}
+  for(const name of files){let db;try{
+   const file=await safe(root,directory?directory+'/'+name:name);if(!(await lstat(file)).isFile())continue;
+   db=new DatabaseSync(file,{readOnly:true});db.exec('PRAGMA busy_timeout=300');
+   const columns=new Set(db.prepare('PRAGMA table_info(threads)').all().map(r=>r.name));
+   if(columns.has('id')){
+    const fields=['name','title','cwd'].map(k=>columns.has(k)?k:`NULL AS ${k}`);
+    for(const row of db.prepare('SELECT id,'+fields.join(',')+' FROM threads').iterate()){
+     if(!UUID.test(row.id))continue;
+     if(typeof row.name==='string'&&row.name.trim()&&!names.has(row.id))names.set(row.id,row.name.trim());
+     if(typeof row.title==='string'&&row.title.trim()&&!legacy.has(row.id))legacy.set(row.id,row.title.trim());
+     if(row.cwd){const old=entries.get(row.id)||{};if(!old.cwd)entries.set(row.id,{...old,cwd:row.cwd});}
+    }
+   }
+   const catalogColumns=new Set(db.prepare('PRAGMA table_info(local_thread_catalog)').all().map(r=>r.name));
+   if(['thread_id','display_title','host_id'].every(k=>catalogColumns.has(k))){
+    for(const row of db.prepare("SELECT thread_id,display_title FROM local_thread_catalog WHERE host_id='local'").iterate()){
+     if(UUID.test(row.thread_id)&&typeof row.display_title==='string'&&row.display_title.trim()&&!catalog.has(row.thread_id))catalog.set(row.thread_id,row.display_title.trim());
+    }
+   }
+  }catch{warnings.push('部分官方标题索引暂不可读，已使用其他可读索引');}finally{db?.close();}}
+ }
+ for(const id of new Set([...entries.keys(),...names.keys(),...catalog.keys(),...legacy.keys()])){
+  const old=entries.get(id)||{},indexTitle=typeof old.thread_name==='string'?old.thread_name.trim():'';
+  entries.set(id,{...old,thread_name:catalog.get(id)||names.get(id)||indexTitle||legacy.get(id)});
+ }
  const walk=async(dir,depth=0)=>{if(depth>6)fail('会话目录层级过深。');let items;try{items=await readdir(await safe(root,dir),{withFileTypes:true});}catch(e){if(e.code==='ENOENT')return;throw e;}for(const item of items){if(item.isSymbolicLink()){warnings.push('已跳过链接文件');continue;}const rel=dir+'/'+item.name;if(item.isDirectory())await walk(rel,depth+1);else if(item.isFile()&&/^rollout-.*\.jsonl$/.test(item.name)){if(records.length>=10000)fail('会话过多，请按实例整理后再读取。');try{const shot=await snapshot(await safe(root,rel)),parsed=parseRollout(shot.bytes),entry=entries.get(parsed.meta.id)||{};parsed.summary=totals([{id:parsed.meta.id,parsed}],7);parsed.usage=[];parsed.messages=[];records.push({key:instance.id+':'+parsed.meta.id,id:parsed.meta.id,instanceId:instance.id,instanceName:instance.name,relative:rel,title:entry.thread_name||parsed.title||parsed.meta.id,cwd:entry.cwd||parsed.meta.cwd||'',updatedAt:entry.updated_at||shot.mtime.toISOString(),archived:dir.startsWith('archived_sessions'),kind:typeof parsed.meta.source==='object'?'subagent':'conversation',size:shot.bytes.length,sha:shot.sha,parsed});}catch{warnings.push('部分会话文件无法完整读取');}}}};
  await walk('sessions');await walk('archived_sessions');return {records,warnings:[...new Set(warnings)]};}
  async list(){const instances=await this.instances(),records=[],warnings=[];for(const i of instances){const scan=await this.scan(i);records.push(...scan.records);warnings.push(...scan.warnings);}const usage=totals(records,7);return {instances,records:records.map(({parsed,sha,relative,...r})=>r).sort((a,b)=>String(b.updatedAt).localeCompare(String(a.updatedAt))),usage,warnings:[...new Set(warnings)]};}

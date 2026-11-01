@@ -1,3 +1,5 @@
+import {fetchCatalog,nodeCompatible,mirrors} from '../../core/dependencies.mjs';
+import {rankSources} from './download-sources.mjs';
 import {VERSION} from '../../release.mjs';
 import {installMerchant} from '../../core/merchant.mjs';
 import { readFile, writeFile, mkdir, cp, rename, rm, chmod, access, realpath, statfs } from 'node:fs/promises';
@@ -16,7 +18,7 @@ async function downloadOne(source, target) {
   let response, bytes;
   try {
     console.log(`Downloading ${new URL(source.url).hostname}; 5-minute limit, progress every 2 seconds.`);
-    const started = Date.now(); let received = 0, last = 0;
+    const started = Date.now(); let received = 0, last = 0, speedAt=started, speedBytes=0;
     const controller = new AbortController();
     let idle = setTimeout(() => controller.abort(), 15000);
     const deadline = setTimeout(() => controller.abort(), 300000);
@@ -24,12 +26,14 @@ async function downloadOne(source, target) {
     try {
       response = await fetch(source.url, { signal: controller.signal });
       clearTimeout(idle);
-      idle = setTimeout(() => controller.abort(), 30000);
+      idle = setTimeout(() => controller.abort(Object.assign(Error('Source stalled'),{slow:true})), 10000);
       if (response.ok) {
         const total = Number(response.headers.get('content-length')) || 0, chunks = [];
         for await (const chunk of response.body) {
-          clearTimeout(idle); idle = setTimeout(() => controller.abort(), 30000);
+          clearTimeout(idle); idle = setTimeout(() => controller.abort(Object.assign(Error('Source stalled'),{slow:true})), 10000);
           chunks.push(chunk); received += chunk.length;
+          if(received>512*1024*1024){controller.abort();throw Error('Dependency exceeds size limit');}
+          if(Date.now()-speedAt>=10000){if((received-speedBytes)/(Date.now()-speedAt)*1000<32768){controller.abort();throw Object.assign(Error('Source too slow'),{slow:true});}speedAt=Date.now();speedBytes=received;}
           if (Date.now() - last >= 2000) {
             const progress = total ? Math.min(100, Math.floor(received / total * 100)) : 0;
             const percent = total ? ` [${'#'.repeat(Math.floor(progress / 5)).padEnd(20, '-')} ${progress}%]` : '';
@@ -41,13 +45,14 @@ async function downloadOne(source, target) {
         console.log(`Download complete: ${(received / 1048576).toFixed(1)} MiB. Verifying checksum...`);
       }
     } finally { clearInterval(heartbeat); clearTimeout(idle); clearTimeout(deadline); }
-  } catch {
+  } catch(error) {
+    if(error.slow)throw error;
     // Native curl also supports the user's configured HTTPS proxy. Some
     // environments permit it while Node's direct TLS connection is unavailable.
     console.log('Direct download interrupted; retrying with system curl (progress below, at most 5 minutes).');
     const partial = target + '.download';
     try {
-      const r = spawnSync('curl', ['--fail', '--location', '--progress-bar', '--show-error', '--speed-limit', '1024', '--speed-time', '30', '--connect-timeout', '15', '--max-time', '300', '--output', partial, source.url], { stdio: 'inherit', windowsHide: true, timeout: 310000 });
+      const r = spawnSync('curl', ['--fail', '--location', '--progress-bar', '--show-error', '--speed-limit', '32768', '--speed-time', '10', '--connect-timeout', '15', '--max-time', '300', '--output', partial, source.url], { stdio: 'inherit', windowsHide: true, timeout: 310000 });
       if (r.status !== 0) throw Error('Dependency download failed. Check network/proxy access to official Node.js and npm distribution sites.');
       bytes = await readFile(partial);
     } finally { await rm(partial, { force: true }); }
@@ -65,7 +70,9 @@ export async function download(source,target){
   }
   if(process.env.BIUUKA_OFFLINE_ONLY==='1')throw Error('Offline dependency is missing or corrupt: '+source.cacheFile);
   let last;
-  for(const url of [...(source.mirrors||[]),source.url]){
+  const urls=[...new Set([...(source.mirrors||[]),source.url])];
+  console.log('Measuring dependency mirrors (bounded samples, at most 4 seconds)...');
+  for(const url of urls.length>1?await rankSources(urls):urls){
     try{await downloadOne({...source,url},target);if(source.cacheFile){await mkdir(path.join(stateDir,'cache'),{recursive:true,mode:0o700});await cp(target,path.join(stateDir,'cache',source.cacheFile));}return {source:new URL(url).hostname,verified:true};}
     catch(e){last=e;console.log('Source failed: '+new URL(url).hostname+'; trying the next verified source.');}
   }
@@ -77,15 +84,23 @@ export async function prepare(finalDir) {
   if (!supported(process.platform, process.arch)) throw Error('Supported: Windows x64/ARM64 and macOS Intel/Apple Silicon.');
   const disk = await statfs(here);
   if (disk.bavail * disk.bsize < 1.5 * 1024 ** 3) throw Error('At least 1.5 GB of free installation space is required.');
-  const sources = lock[`${process.platform}-${process.arch}`];
+  let sources = lock[`${process.platform}-${process.arch}`],codexVersion='0.163.0',nodeRange='>=16';
+  if(process.env.BIUUKA_OFFLINE_ONLY!=='1'){try{const catalog=await fetchCatalog();sources=catalog.platforms[`${process.platform}-${process.arch}`];codexVersion=catalog.codex.version;nodeRange=catalog.codex.nodeRange;console.log(`Server catalog: Codex ${codexVersion}; Node requirement ${nodeRange}, Biuuka >=24.`);}catch{console.log('Server catalog unavailable; using checksum-pinned installer dependencies.');}}
+  let selectedNode=process.execPath;
+  if(!nodeCompatible(process.versions.node,nodeRange)){
+    const folder=path.join(here,'runtime','selected-node');await mkdir(folder,{recursive:true});
+    if(process.platform==='win32'){selectedNode=path.join(folder,'node.exe');await download(sources.node,selectedNode);}else{const archive=path.join(folder,'node.tgz');await download(sources.node,archive);const r=spawnSync('tar',['-xzf',archive,'-C',folder,'--strip-components=1'],{timeout:60000});if(r.status!==0)throw Error('Node extraction failed');await rm(archive);selectedNode=path.join(folder,'bin/node');}
+    const verified=spawnSync(selectedNode,['-p','process.versions.node'],{encoding:'utf8',timeout:10000});if(verified.status!==0||!nodeCompatible(verified.stdout.trim(),nodeRange))throw Error('Downloaded Node is incompatible');
+  }else console.log(`Reusing compatible Node ${process.versions.node}; no Node upgrade required.`);
+  const codexPattern=new RegExp('^codex-cli '+codexVersion.replaceAll('.', String.fromCharCode(92)+'.')+'$');
   await migrateState();
   const state = stateDir;
   const settingsFile = path.join(state, 'config.json');
   let previous = {}; try { previous = JSON.parse(await readFile(settingsFile, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
   let codex = process.env.BIUUKA_CODEX || 'codex';
   let bundled = false;
-  if (!version(codex, /^codex-cli 0\.163\.0$/) && previous.codex && version(previous.codex, /^codex-cli 0\.163\.0$/)) codex = previous.codex;
-  if (version(codex, /^codex-cli 0\.163\.0$/)) {
+  if (!version(codex, codexPattern) && previous.codex && version(previous.codex, codexPattern)) codex = previous.codex;
+  if (version(codex, codexPattern)) {
     if (!path.isAbsolute(codex)) {
       const result = spawnSync(process.platform === 'win32' ? 'where.exe' : '/usr/bin/which', [codex], { encoding: 'utf8', windowsHide: true });
       codex = result.stdout.trim().split(/\r?\n/)[0];
@@ -101,7 +116,7 @@ export async function prepare(finalDir) {
     codex = path.join(here, relative); bundled = true;
   }
   if (!codex) {
-    console.log('[3/6] Preparing native Codex 0.163.0 (npm is not required)...');
+    console.log(`[3/6] Preparing native Codex ${codexVersion} (npm is not required)...`);
     const runtime = path.join(here, 'runtime'); await mkdir(runtime, { recursive: true });
     const archive = path.join(runtime, 'codex.tgz');
     const origin=await download(sources.codex, archive);
@@ -113,16 +128,16 @@ export async function prepare(finalDir) {
     if (unpack.status !== 0) throw Error('Codex extraction failed');
     await rm(archive);
     codex = path.join(runtime, 'package', sources.binary);
-    if (!version(codex, /^codex-cli 0\.163\.0$/)) throw Error('Native Codex is not compatible with this operating system');
+    if (!version(codex, codexPattern)) throw Error('Native Codex is not compatible with this operating system');
     bundled = true;
   }
   console.log('[3/6] Codex executable verified and ready.');
   const home = path.resolve(process.env.CODEX_HOME || previous.codexHome || path.join(os.homedir(), '.codex'));
-  const nodeRelative = path.relative(here, process.execPath);
+  const nodeRelative = path.relative(here, selectedNode);
   const bundledNode = !path.isAbsolute(nodeRelative) && !nodeRelative.startsWith('..' + path.sep);
   const source=installMerchant(process.env.BIUUKA_INSTALL_SOURCE,previous.merchant);
   console.log('Installation source: '+source.name+' ('+source.url+')');
-  const config = { merchant:source, version: VERSION, baseDir:finalDir, node: bundledNode ? path.join(finalDir, nodeRelative) : process.execPath,
+  const config = { merchant:source, version: VERSION, baseDir:finalDir, node: bundledNode ? path.join(finalDir, nodeRelative) : selectedNode,
     codex: bundled ? path.join(finalDir, path.relative(here, codex)) : codex, codexHome: home, port: previous.port || 17322, work: path.join(state, 'work') };
   await writeFile(path.join(here, 'install-config.json'), JSON.stringify(config), { mode: 0o600 });
   console.log(`Environment ready: ${process.platform}/${process.arch}; Codex home: ${home}`);
@@ -174,7 +189,7 @@ export async function installMac() {
     throw e;
   } finally { await rm(lockDir, { recursive: true, force: true }); }
 }
-if (process.argv[1] && await realpath(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && await realpath(process.argv[1]).catch(()=>null) === fileURLToPath(import.meta.url)) {
   try { if (process.argv[2] === 'prepare') await prepare(process.argv[3]); else await installMac(); }
   catch (e) { console.error('Biuuka installation failed:', e.message); process.exitCode = 1; }
 }

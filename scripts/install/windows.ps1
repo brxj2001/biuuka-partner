@@ -33,9 +33,31 @@ function Get-Dependency($Source, $Target) {
         }
     }
     if ($env:BIUUKA_OFFLINE_ONLY -eq '1') { throw 'Offline Node.js cache missing or checksum mismatch.' }
-    foreach ($Url in @($Source.mirrors) + @($Source.url)) {
+    Write-Host 'Measuring Node.js download sources (bounded samples)...'
+    $Probes = @()
+    try {
+        foreach ($Url in @($Source.mirrors) + @($Source.url)) {
+            $Prefix = Join-Path $env:TEMP ('biuuka-speed-' + [guid]::NewGuid().ToString('N'))
+            $Args = @('--fail','--location','--silent','--connect-timeout','3','--max-time','4','--range','0-131071','--max-filesize','262144','--output',('"' + $Prefix + '.sample"'),'--write-out','%{speed_download}',$Url)
+            $Process = Start-Process curl.exe -ArgumentList $Args -PassThru -WindowStyle Hidden -RedirectStandardOutput ($Prefix + '.rate') -RedirectStandardError ($Prefix + '.err')
+            $Probes += @{ Url=$Url; Prefix=$Prefix; Process=$Process; Rate=0.0 }
+        }
+        foreach ($Probe in $Probes) {
+            $Probe.Process.WaitForExit()
+            $Rate = 0.0
+            if ($Probe.Process.ExitCode -eq 0) { [double]::TryParse((Get-Content -Raw ($Probe.Prefix + '.rate')), [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$Rate) | Out-Null }
+            $Probe.Rate = $Rate
+        }
+        $Urls = @($Probes | Sort-Object { $_.Rate } -Descending | ForEach-Object { $_.Url })
+    } finally {
+        foreach ($Probe in $Probes) {
+            if (!$Probe.Process.HasExited) { $Probe.Process.Kill(); $Probe.Process.WaitForExit() }
+            foreach ($Suffix in @('.sample','.rate','.err')) { Remove-Item -LiteralPath ($Probe.Prefix + $Suffix) -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    foreach ($Url in $Urls) {
         Write-Host ('Downloading Node.js from ' + ([Uri]$Url).Host + ' ...')
-        & curl.exe --fail --location --progress-bar --show-error --connect-timeout 8 --max-time 300 --speed-limit 1024 --speed-time 20 --output $Target $Url
+        & curl.exe --fail --location --progress-bar --show-error --connect-timeout 8 --max-time 300 --speed-limit 32768 --speed-time 10 --output $Target $Url
         if ($LASTEXITCODE -eq 0 -and (Get-FileHash -LiteralPath $Target).Hash.ToLowerInvariant() -eq $Source.digest) {
             Copy-Item -LiteralPath $Target -Destination (Join-Path (Join-Path $State 'cache') $Source.cacheFile) -Force
             Write-Json (Join-Path $State 'node-source.json') @{ source=([Uri]$Url).Host; verified=$true }; return
@@ -71,7 +93,7 @@ try {
             if (!(Get-Command curl.exe -ErrorAction SilentlyContinue)) { throw 'Windows curl.exe is required. Update Windows first.' }
             Write-Host "[2/6] Checking Node.js 24+ ($NativeArch)..."
             $Node = $null
-            foreach ($Possible in @((Join-Path $Program 'runtime\node.exe'), (Get-Command node.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source))) {
+            foreach ($Possible in @((Join-Path $Program 'runtime\selected-node\node.exe'), (Join-Path $Program 'runtime\node.exe'), (Get-Command node.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source))) {
                 if ($Possible -and (Test-Path -LiteralPath $Possible)) {
                     $Info = & $Possible -p "process.versions.node.split('.')[0] + ':' + process.arch" 2>$null
                     if ($LASTEXITCODE -eq 0 -and $Info -match ('^(2[4-9]|[3-9][0-9]):' + $NativeArch + '$')) { $Node = $Possible; break }
@@ -86,6 +108,7 @@ try {
                 Get-Dependency $Source $Node
             }
             if ($Node -eq (Join-Path $Program 'runtime\node.exe')) { New-Item -ItemType Directory -Force (Join-Path $PSScriptRoot 'runtime') | Out-Null; Copy-Item -LiteralPath $Node -Destination (Join-Path $PSScriptRoot 'runtime\node.exe'); $Node = Join-Path $PSScriptRoot 'runtime\node.exe' }
+            if ($Node -eq (Join-Path $Program 'runtime\selected-node\node.exe')) { New-Item -ItemType Directory -Force (Join-Path $PSScriptRoot 'runtime') | Out-Null; Copy-Item -LiteralPath $Node -Destination (Join-Path $PSScriptRoot 'runtime\node.exe'); $Node = Join-Path $PSScriptRoot 'runtime\node.exe' }
             Write-Host '[2/6] Node.js ready. Checking Codex dependency...'
             & $Node (Join-Path $PSScriptRoot 'setup.mjs') prepare $Program
             if ($LASTEXITCODE -ne 0) { throw 'Environment preparation failed.' }

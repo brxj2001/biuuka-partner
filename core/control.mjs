@@ -1,3 +1,4 @@
+import {fetchCatalog,nodeCompatible} from './dependencies.mjs';
 import {readTrayState,requestTrayClose} from '../tray/tray-control.mjs';
 import {merchant,DEFAULT_MERCHANT} from './merchant.mjs';
 import {readFile,writeFile,mkdir,rename,rm,readdir,lstat} from 'node:fs/promises';
@@ -19,9 +20,10 @@ export async function createControl({state,config,appDir}){
  async function checkUpdates(){
   if(!settings.engineEnabled||!settings.networkEnabled)throw Object.assign(Error(),{code:"network_disabled"});
   const query=async(url,max=2000000)=>{const r=await fetch(url,{signal:AbortSignal.any([outbound.signal,AbortSignal.timeout(10000)])});if(!r.ok)throw Error();let size=0,parts=[];for await(const b of r.body){size+=b.length;if(size>max)throw Error();parts.push(b);}return JSON.parse(Buffer.concat(parts));};
-  const [node,codex,app]=await Promise.allSettled([query('https://nodejs.org/dist/index.json'),query('https://registry.npmjs.org/@openai/codex/latest',100000),query('https://biuuka.com/downloads/biuuka/latest.json',65536)]);
+  const [catalog,app]=await Promise.allSettled([fetchCatalog({signal:outbound.signal}),query('https://biuuka.com/downloads/biuuka/latest.json',65536)]);
+  const metadata=catalog.status==='fulfilled'?catalog.value:null;
   const currentBuild=await readFile(path.join(appDir,'build-info.json'),'utf8').then(JSON.parse).catch(()=>({}));
-  const info={checkedAt:new Date().toISOString(),node:{current:process.version,latest:node.status==='fulfilled'?node.value.find(v=>v.lts)?.version:null},codex:{current:await safeVersion(),latest:codex.status==='fulfilled'?codex.value.version:null},app:{available:app.status==='fulfilled'&&app.value.build!==currentBuild.build,currentBuild:currentBuild.build||null,version:app.status==='fulfilled'?app.value.version:null,build:app.status==='fulfilled'?app.value.build:null},note:'依赖新版本仅提示；需使用经过兼容性校验的安装器更新。'};
+  const info={checkedAt:new Date().toISOString(),node:{current:process.version,latest:metadata?.node.recommended||null,compatible:metadata?nodeCompatible(process.versions.node,metadata.codex.nodeRange):null,required:metadata?.codex.nodeRange||null},codex:{current:await safeVersion(),latest:metadata?.codex.version||null},app:{available:app.status==='fulfilled'&&app.value.build!==currentBuild.build,currentBuild:currentBuild.build||null,version:app.status==='fulfilled'?app.value.version:null,build:app.status==='fulfilled'?app.value.build:null},catalogCheckedAt:metadata?.checkedAt||null,note:metadata?(nodeCompatible(process.versions.node,metadata.codex.nodeRange)?'现有 Node 兼容，无需升级 Node；更新 Codex 请重新运行安装器。':'现有 Node 不满足兼容要求；安装器将准备适用 Node 后更新 Codex。'):'服务器版本信息暂不可用，不代表已是最新版。'};
   await write('dependency-check.json',info);return info;
  }
  async function cacheSize(){let total=0;try{for(const name of await readdir(path.join(state,'cache'))){const s=await lstat(path.join(state,'cache',name));if(s.isFile())total+=s.size;}}catch(e){if(e.code!=='ENOENT')throw e;}return total;}

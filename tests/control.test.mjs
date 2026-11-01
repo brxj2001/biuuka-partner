@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,writeFile,readFile,mkdir,rm} from 'node:fs/promises';import path from 'node:path';import os from 'node:os';import {createControl} from '../core/control.mjs';
+import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,writeFile,readFile,mkdir,rm,symlink} from 'node:fs/promises';import path from 'node:path';import os from 'node:os';import {createControl} from '../core/control.mjs';
 test('control settings and hashed grants persist; cache cleanup preserves account and records',async()=>{
  const state=await mkdtemp(path.join(os.tmpdir(),'biuuka-control-'));const params={state,config:{codex:process.execPath},appDir:state};try{
  const c=await createControl(params);assert.equal(c.enabled(),true);await Promise.all([c.save({engineEnabled:false}),c.save({autoUpdate:false})]);assert.equal(c.enabled(),false);assert.equal((await createControl(params)).settings().autoUpdate,false);
@@ -27,4 +27,15 @@ test('network permission persists and blocks background checks and notifications
  await c.save({networkEnabled:true,engineEnabled:false});await assert.rejects(c.checkUpdates(),{code:'network_disabled'});await c.appUpdate.status();assert.equal(calls,0);
  await c.save({engineEnabled:true});assert.equal(c.online(),true);
  }finally{globalThis.fetch=original;await rm(state,{recursive:true,force:true});}
+});
+
+test('program storage uses configured directories, skips links and never modifies files',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'biuuka-storage-'));
+ try{const state=path.join(root,'state'),base=path.join(root,'installed'),active=path.join(state,'app'),outside=path.join(root,'outside');
+ await mkdir(base);await mkdir(active,{recursive:true});await mkdir(outside);await writeFile(path.join(base,'program'),'12345');await writeFile(path.join(active,'code'),'123');await writeFile(path.join(outside,'private'),'never counted');await symlink(outside,path.join(base,'link'));
+ const c=await createControl({state,config:{baseDir:base,codex:'/configured/codex',node:'/configured/node'},appDir:active});await c.save({networkEnabled:false});const result=await c.storage();
+ assert.equal(result.directories[0].bytes,5);assert.equal(result.directories[0].status,'partial');assert.equal(result.directories[1].bytes,3);assert.equal(result.directories[1].status,'complete');assert.equal(result.codexPath,'/configured/codex');assert.equal(await readFile(path.join(outside,'private'),'utf8'),'never counted');
+ const same=await createControl({state,config:{baseDir:base,codex:'/configured/codex'},appDir:base});assert.deepEqual((await same.storage()).directories[0].roles,['installation','running']);assert.equal((await same.storage()).directories.length,1);
+ await rm(base,{recursive:true});assert.equal((await same.storage()).directories[0].status,'missing');
+ }finally{await rm(root,{recursive:true,force:true});}
 });

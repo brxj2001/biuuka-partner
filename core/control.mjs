@@ -25,6 +25,28 @@ export async function createControl({state,config,appDir}){
   await write('dependency-check.json',info);return info;
  }
  async function cacheSize(){let total=0;try{for(const name of await readdir(path.join(state,'cache'))){const s=await lstat(path.join(state,'cache',name));if(s.isFile())total+=s.size;}}catch(e){if(e.code!=='ENOENT')throw e;}return total;}
+ // Only inspect fixed program directories; never follow links into user data.
+ let storageFlight;
+ async function storage(){
+  if(storageFlight)return storageFlight;
+  storageFlight=(async()=>{
+   const directories=[];
+   for(const [role,directory] of [['installation',config.baseDir||appDir],['running',appDir]]){
+    const existing=directories.find(d=>d.path===directory);if(existing){existing.roles.push(role);continue;}
+    const result={path:directory,roles:[role],bytes:0,files:0,status:'complete'},started=Date.now();let visited=0;
+    async function walk(file,depth){
+     if(++visited>20000||depth>32||Date.now()-started>5000){result.status='partial';return;}
+     let info;try{info=await lstat(file);}catch(e){result.status=e.code==='ENOENT'&&file===directory?'missing':'partial';return;}
+     if(info.isSymbolicLink()){result.status='partial';return;}
+     if(info.isFile()){result.bytes+=info.size;result.files++;return;}
+     if(!info.isDirectory())return;
+     try{for(const name of await readdir(file)){if(visited>20000||Date.now()-started>5000){result.status='partial';break;}await walk(path.join(file,name),depth+1);}}catch{result.status='partial';}
+    }
+    await walk(directory,0);directories.push(result);
+   }
+   return {directories,nodePath:config.node||process.execPath,codexPath:config.codex,checkedAt:new Date().toISOString()};
+  })().finally(()=>{storageFlight=null;});return storageFlight;
+ }
  async function notify(origin,title,body){
   if(!settings.engineEnabled||!settings.networkEnabled||!settings.notifications)throw Object.assign(Error(),{code:'notifications_disabled'});
   if(typeof title!=='string'||!title.trim()||title.length>80||typeof body!=='string'||body.length>500)throw Object.assign(Error(),{code:'invalid_notification'});
@@ -39,7 +61,7 @@ export async function createControl({state,config,appDir}){
   return {submitted:true,delivery:'操作系统控制通知位置和显示，勿扰模式可能隐藏通知。'};
  }
  const appUpdate=createVersion({appDir,state,allowed:()=>settings.networkEnabled!==false,background:()=>settings.engineEnabled!==false&&settings.networkEnabled!==false,signal:()=>outbound.signal,manual:process.env.BIUUKA_MANUAL_UPDATE==='1'&&!!process.send,trigger:()=>process.send({type:'request-update'})});
- return {appUpdate,access,idle:()=>pendingWrites===0,enabled:()=>settings.engineEnabled!==false,online:()=>settings.engineEnabled!==false&&settings.networkEnabled!==false,settings:()=>({...settings}),save,notify,checkUpdates,
+ return {storage,appUpdate,access,idle:()=>pendingWrites===0,enabled:()=>settings.engineEnabled!==false,online:()=>settings.engineEnabled!==false&&settings.networkEnabled!==false,settings:()=>({...settings}),save,notify,checkUpdates,
   async status(){return {tray:{running:(await readTrayState(state)).running},merchant:merchant(config.merchant)||DEFAULT_MERCHANT,dataDirectory:state,codexHome:config.codexHome,settings:{...settings},platform:process.platform,architecture:process.arch,node:process.version,codex:await safeVersion(),cacheBytes:await cacheSize(),grants:access.list(),update:await read('update-status.json',null),dependencies:await read('dependency-check.json',null)};},
   async closeTray(){return requestTrayClose(state);},
   async openTray(){

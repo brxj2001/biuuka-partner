@@ -206,6 +206,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
         if(req.url==='/control/record/delete'){if(!records)return json(404,{error:'records_unavailable'});if(busy||draining)return json(409,{error:'busy'});busy=true;try{await removeRecord(input.id);return json(200,{deleted:true});}finally{busy=false;}}
         if(req.url==='/control/tray/close'){if(Object.keys(input).length)return json(400,{error:'invalid_request'});return json(200,await control.closeTray());}
         if(req.url==='/control/tray/open'){if(Object.keys(input).length)return json(400,{error:'invalid_request'});return json(200,await control.openTray());}
+        if(req.url==='/control/storage'){if(Object.keys(input).length)return json(400,{error:'invalid_request'});return json(200,await control.storage());}
         if(req.url==='/control/status')return json(200,await control.status());
         if(req.url==='/control/settings'){
           if(Object.keys(input).some(k=>!['autoUpdate','notifications','networkEnabled'].includes(k))||Object.values(input).some(v=>typeof v!=='boolean'))return json(400,{error:'invalid_request'});

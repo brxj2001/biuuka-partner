@@ -52,7 +52,9 @@ Write-Host "$Count PowerShell parsing and integrity checks passed. SCM and UAC r
 
 & (Join-Path $PSScriptRoot 'desktop-switch.test.ps1')
 if ($env:OS -eq 'Windows_NT') {
-    $Inventory = & (Join-Path $PSScriptRoot '../chatgpt/installation-inventory.ps1') | ConvertFrom-Json
+    $InventoryJson = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '../chatgpt/installation-inventory.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Installation inventory process failed' }
+    $Inventory = $InventoryJson | ConvertFrom-Json
     if ($null -eq $Inventory.items -or $null -eq $Inventory.partial) { throw 'Installation inventory output is invalid' }
     Write-Host 'Windows installed application inventory completed (read-only).'
 }

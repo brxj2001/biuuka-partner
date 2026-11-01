@@ -1,7 +1,23 @@
 import {readFile,writeFile,mkdir,rm,rename} from 'node:fs/promises';
-import {createHash} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {inflateRawSync} from 'node:zlib';
 import path from 'node:path';
+// Windows readers and antivirus may temporarily deny replacement. Never delete the
+// destination to work around a sharing violation: retain the last complete record.
+export async function retryFileOperation(operation,action,{wait=ms=>new Promise(r=>setTimeout(r,ms)),attempts=12}={}){
+ for(let i=0;;i++)try{return await action();}catch(error){
+  error.operation=operation;
+  if(!['EPERM','EACCES','EBUSY'].includes(error.code)||i>=attempts-1)throw error;
+  await wait(Math.min(50*(i+1),250));
+ }
+}
+export async function writeUpdateProgress(state,value){
+ const file=path.join(state,'update-status.json'),temp=file+'.'+randomUUID()+'.tmp';
+ try{
+  await retryFileOperation('write_progress',()=>writeFile(temp,JSON.stringify(value),{mode:0o600,flag:'w'}));
+  await retryFileOperation('write_progress',()=>rename(temp,file));
+ }finally{await rm(temp,{force:true,maxRetries:5,retryDelay:100}).catch(()=>{});}
+}
 export const UPDATE_ORIGIN='https://biuuka.com/downloads/biuuka/';
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 export function unpack(bytes){
@@ -44,8 +60,8 @@ export async function stageUpdate(state,current,signal,report=async()=>{}){
   if(!compatibleSources(JSON.parse(await readFile(path.join(current,'sources.json'),'utf8')),JSON.parse(files.get('sources.json')?.toString()||'null')))throw Error('installer_required');
   signal?.throwIfAborted();
   await report({phase:'staging'});
-  const next=path.join(state,'update-next');await rm(next,{recursive:true,force:true});await mkdir(next,{recursive:true,mode:0o700});
-  for(const [name,data]of files)await writeFile(path.join(next,name),data,{mode:0o600});
+  const next=path.join(state,'update-next');await retryFileOperation('prepare_files',()=>rm(next,{recursive:true,force:true,maxRetries:5,retryDelay:100}));await mkdir(next,{recursive:true,mode:0o700});
+  for(const [name,data]of files)await retryFileOperation('prepare_files',()=>writeFile(path.join(next,name),data,{mode:0o600}));
   return {next,build:meta.build};
 }
 export async function selectApplication(base,state){

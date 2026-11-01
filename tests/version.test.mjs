@@ -59,8 +59,8 @@ test('update progress is fresh despite cached version metadata and projects only
   const receipt={status:'running',phase:'downloading',receivedBytes:20,totalBytes:100,updatedAt:new Date(time).toISOString(),path:'/private/fixture',token:'fixture-secret',reason:'arbitrary private message'};
   await writeFile(path.join(state,'update-status.json'),JSON.stringify(receipt));
   let result=await v.status();assert.deepEqual(result.update,{status:'running',phase:'downloading',updatedAt:receipt.updatedAt,receivedBytes:20,totalBytes:100});
-  receipt.receivedBytes=50;await writeFile(path.join(state,'update-status.json'),JSON.stringify(receipt));
-  assert.equal((await v.status()).update.receivedBytes,50);assert.equal(calls,1);
+  receipt.operation='write_progress';receipt.receivedBytes=50;await writeFile(path.join(state,'update-status.json'),JSON.stringify(receipt));
+  assert.equal((await v.status()).update.operation,'write_progress');assert.equal((await v.status()).update.receivedBytes,50);assert.equal(calls,1);
   time+=120001;assert.equal((await v.status()).update.status,'interrupted');
   const offline=createVersion({appDir:state,state,background:()=>false,allowed:()=>false,request:()=>assert.fail('offline request')});
   assert.equal((await offline.status()).update.receivedBytes,50);

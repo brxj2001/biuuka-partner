@@ -72,7 +72,7 @@ test('supervisor recovers a failed switched application and releases its child o
  }finally{if(supervisor&&supervisor.exitCode===null&&supervisor.signalCode===null)supervisor.kill('SIGKILL');await rm(root,{recursive:true,force:true});}
 });
 
-test('silent update stages verified application, switches while idle and confirms the new service',async()=>{
+for(const fault of ['none','progress-lock','switch-denied'])test('silent update handles '+fault+' and retains a healthy service',async()=>{
  const {spawn}=await import('node:child_process'),{once}=await import('node:events'),{cp}=await import('node:fs/promises'),net=await import('node:net');
  const root=await mkdtemp(path.join(os.tmpdir(),'biuuka-update-live-'));let supervisor,pid;
  const reservation=net.createServer();reservation.listen(0,'127.0.0.1');await once(reservation,'listening');const port=reservation.address().port;await new Promise(r=>reservation.close(r));
@@ -81,11 +81,12 @@ test('silent update stages verified application, switches while idle and confirm
  const base=path.join(root,'base');await mkdir(base);for(const [name,bytes]of unpack(await readFile(path.join(output,'biuuka.zip'))))await writeFile(path.join(base,name),bytes);
  await writeFile(path.join(base,'build-info.json'),JSON.stringify({build:'old',updateProtocol:1}));
  await writeFile(path.join(root,'config.json'),JSON.stringify({codex:process.execPath,codexHome:root,port,work:path.join(root,'work')}));
- const preload=path.join(root,'preload.mjs');await writeFile(preload,`import fs from 'node:fs/promises';const original=globalThis.fetch;globalThis.fetch=async(url,options)=>String(url).startsWith('https://biuuka.com/downloads/biuuka/')?new Response(await fs.readFile(${JSON.stringify(output)}+'/'+String(url).split('/').pop())):original(url,options);const timeout=globalThis.setTimeout;globalThis.setTimeout=(fn,ms,...args)=>timeout(fn,ms===60000?50:ms,...args);`);
+ if(fault==='switch-denied')await cp(base,path.join(root,'app'),{recursive:true});
+ const preload=path.join(root,'preload.mjs');await writeFile(preload,`import {syncBuiltinESMExports} from 'node:module';import fs from 'node:fs/promises';const rename=fs.rename;let failures=0;fs.rename=async(from,to)=>{if((${JSON.stringify(fault)}==='progress-lock'&&String(to).endsWith('update-status.json')&&failures++<3)||(${JSON.stringify(fault)}==='switch-denied'&&String(from).endsWith('update-next'))){throw Object.assign(Error('fixture'),{code:'EPERM'});}return rename(from,to);};syncBuiltinESMExports();const original=globalThis.fetch;globalThis.fetch=async(url,options)=>String(url).startsWith('https://biuuka.com/downloads/biuuka/')?new Response(await fs.readFile(${JSON.stringify(output)}+'/'+String(url).split('/').pop())):original(url,options);const timeout=globalThis.setTimeout;globalThis.setTimeout=(fn,ms,...args)=>timeout(fn,ms===60000?50:ms,...args);`);
  supervisor=spawn(process.execPath,['--import',pathToFileURL(preload).href,path.join(base,'supervisor.mjs')],{env:{...process.env,BIUUKA_STATE:root},stdio:'ignore'});
  let updated=false;
- for(let i=0;i<200;i++){try{const status=JSON.parse(await readFile(path.join(root,'update-status.json'),'utf8'));if(status.status==='updated'){updated=true;break;}}catch{}await new Promise(r=>setTimeout(r,50));}
- assert.equal(updated,true);const runtime=JSON.parse(await readFile(path.join(root,'runtime.json'),'utf8'));pid=runtime.pid;
+ for(let i=0;i<200;i++){try{const status=JSON.parse(await readFile(path.join(root,'update-status.json'),'utf8'));if(status.status===(fault==='switch-denied'?'deferred':'updated')){if(fault==='switch-denied'){assert.equal(status.code,'EPERM');assert.equal(status.operation,'switch_files');}updated=true;break;}}catch{}await new Promise(r=>setTimeout(r,50));}
+ assert.equal(updated,true);if(fault==='switch-denied')assert.equal(JSON.parse(await readFile(path.join(root,'app','build-info.json'))).build,'old');const runtime=JSON.parse(await readFile(path.join(root,'runtime.json'),'utf8'));pid=runtime.pid;
  assert.equal((await fetch(`http://127.0.0.1:${port}/health`)).status,200);await assert.rejects(readFile(path.join(root,'update-old','build-info.json')),{code:'ENOENT'});
  const exit=once(supervisor,'exit');supervisor.kill('SIGTERM');await exit;assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});
  }finally{if(supervisor&&supervisor.exitCode===null&&supervisor.signalCode===null)supervisor.kill('SIGKILL');await rm(root,{recursive:true,force:true});}

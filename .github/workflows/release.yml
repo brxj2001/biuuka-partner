@@ -23,6 +23,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 验证更新进度真实文件占用与有限重试
+        run: node --test tests/update-io.test.mjs
       - name: 检查 PowerShell 安装与托盘脚本
         shell: pwsh
         run: ./tests/windows.test.ps1

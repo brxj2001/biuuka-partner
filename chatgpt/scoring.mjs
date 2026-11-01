@@ -25,7 +25,7 @@ const number=(x,max=100)=>typeof x==='number'&&Number.isFinite(x)&&x>=0&&x<=max?
 const text=x=>typeof x==='string'?x.slice(0,2000):'';
 function publicResult(s){
  if(!s||!uuid.test(s.publicId))throw error('score_response_invalid');
- const result={remoteId:s.publicId,resultUrl:PUBLIC+'/result/'+s.publicId,status:['completed','failed'].includes(s.status)?s.status:'pending',message:'',errorCode:'',httpStatus:null};
+ const result={remoteId:s.publicId,resultUrl:PUBLIC+'/result/'+s.publicId,status:['completed','failed'].includes(s.status)?s.status:'pending',message:'',errorCode:'',httpStatus:null,retryAt:null,retrySource:null};
  if(result.status==='failed')return {...result,machineScore:number(s.machineScore,20),judge:text(s.judgeModel),errorCode:text(s.errorCode),message:s.errorCode==='INVALID_JUDGE_RESPONSE'?'第三方视觉评委返回了无效分数，未生成总分。作品已上传，刷新只查询原任务，不会重复发布。':text(s.errorMessage)||'第三方评分失败'};
  if(result.status!=='completed')return result;
  if(s.isMock===true||s.renderNeedsReview===true)return {...result,status:'unverified',message:'第三方返回模拟评分或待复核结果，未作为正式分数。'};
@@ -34,16 +34,30 @@ function publicResult(s){
  for(const [key,label] of [['pelican','鹈鹕'],['bicycle','自行车'],['ridingRelationship','骑乘关系'],['mechanics','机械合理性'],['composition','构图']]){const d=s.judgeResult?.[key];if(d)details.push({name:label,score:number(d.score),maxScore:number(d.maxScore),reason:text(d.reason)});}
  return {...result,score,maxScore:100,mode:'third-party',machineScore:number(s.machineScore,20),visionScore:number(s.visionScore,80),details,feedback:text(s.judgeResult?.summary),version:text(s.scoringVersion),judge:text(s.judgeModel),judgePromptVersion:text(s.judgePromptVersion)};
 }
-export function createScoring({state,records,online,fetcher=fetch}){
+export function createScoring({state,records,online,fetcher=fetch,now=Date.now}){
  const root=path.join(state,'scores');let active=false;
  const file=(id,p)=>{if(!uuid.test(id)||!['openenv','pelicanscore'].includes(p))throw error('score_input_invalid');return path.join(root,id+'-'+p+'.json');};
  const load=async(id,p)=>{try{return JSON.parse(await readFile(file(id,p),'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
  const save=async(id,p,value)=>{await mkdir(root,{recursive:true,mode:0o700});const dest=file(id,p),temp=dest+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(value),{mode:0o600,flag:'wx'});await rename(temp,dest);return value;};
+ const cooldownFile=path.join(root,'pelicanscore-cooldown.json');
+ const cooldowns=async()=>{try{return JSON.parse(await readFile(cooldownFile,'utf8'));}catch(e){if(e.code==='ENOENT')return {};throw e;}};
+ async function guard(kind){const c=(await cooldowns())[kind];if(c&&Date.parse(c.retryAt)>now())throw Object.assign(error('score_rate_limited'),{httpStatus:429,...c});}
+ async function limited(r,kind){
+  const raw=r.headers.get('retry-after');let wait=NaN;
+  if(raw&&/^\d+$/.test(raw.trim()))wait=Number(raw)*1000;
+  else if(raw)wait=Date.parse(raw)-now();
+  const official=Number.isFinite(wait)&&wait>=0&&wait<=8640000000000000-now();
+  const c={retryAt:new Date(now()+(official?Math.max(1000,wait):60000)).toISOString(),retrySource:official?'server':'local'};
+  const all=await cooldowns();all[kind]=c;await mkdir(root,{recursive:true,mode:0o700});
+  const temp=cooldownFile+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(all),{mode:0o600,flag:'wx'});await rename(temp,cooldownFile);
+  return Object.assign(error('score_rate_limited'),{httpStatus:429,...c});
+ }
  async function request(url,body){
   if(!online())throw error('network_disabled');
+  const kind=body===undefined?'query':'submit';await guard(kind);
   const abort=new AbortController(),timer=setInterval(()=>{if(!online())abort.abort();},200);
   try{const r=await fetcher(url,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),redirect:'error',signal:AbortSignal.any([abort.signal,AbortSignal.timeout(30000)])});
-   if(!r.ok){await r.body?.cancel();throw Object.assign(error(r.status===429?'score_rate_limited':r.status===403?'score_access_denied':r.status===413?'score_too_large':r.status>=500?'score_remote_failed':'score_http_rejected'),{httpStatus:r.status});}let bytes=0,parts=[];for await(const chunk of r.body){bytes+=chunk.length;if(bytes>262144)throw error('score_response_invalid');parts.push(chunk);}try{return JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{throw error('score_response_invalid');}
+   if(!r.ok){const rate=r.status===429?await limited(r,kind):null;await r.body?.cancel();if(rate)throw rate;throw Object.assign(error(r.status===429?'score_rate_limited':r.status===403?'score_access_denied':r.status===413?'score_too_large':r.status>=500?'score_remote_failed':'score_http_rejected'),{httpStatus:r.status});}let bytes=0,parts=[];for await(const chunk of r.body){bytes+=chunk.length;if(bytes>262144)throw error('score_response_invalid');parts.push(chunk);}try{return JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{throw error('score_response_invalid');}
   }catch(e){if(!online())throw error('network_disabled');throw transportError(e);
   }finally{clearInterval(timer);}
  }
@@ -73,7 +87,7 @@ export function createScoring({state,records,online,fetcher=fetch}){
   },
   async export({id,snapshotSvg}){if(active)throw error('score_busy');active=true;try{return {svg:(await input(id,snapshotSvg)).svg};}finally{active=false;}},
   async import(svg){const source=scoringInput(svg);if(source.inputKind!=='svg'||/<html\b/i.test(svg))throw error('score_standalone_required');return records.put({id:randomUUID(),createdAt:new Date().toISOString(),preset:'pelican-svg',status:'complete',answer:source.svg,origin:'svg-import',threadId:null,saved:false});},
-  async list(id){await records.get(id);const values=await Promise.all(['openenv','pelicanscore'].map(p=>load(id,p)));return {scores:values.filter(Boolean)};},
+  async list(id){await records.get(id);const values=await Promise.all(['openenv','pelicanscore'].map(p=>load(id,p)));return {scores:values.filter(Boolean).map(s=>s.status==='unknown'&&s.httpStatus===429?{...s,status:'rate_limited'}:s),cooldowns:await cooldowns()};},
   async remove(id){if(active)throw error('score_busy');await Promise.all([...['openenv','pelicanscore'].map(p=>rm(file(id,p),{force:true})),rm(sourceFile(id),{force:true})]);},
   async submit({id,provider,publicConfirmed,snapshotSvg,retryConfirmed}){
    file(id,provider);if(provider==='openenv')throw error('score_provider_retired');if(provider==='pelicanscore'&&publicConfirmed!==true)throw error('score_public_confirmation_required');
@@ -81,15 +95,16 @@ export function createScoring({state,records,online,fetcher=fetch}){
    try{const source=await input(id,snapshotSvg),prior=await load(id,provider);
     if(prior&&prior.hash!==source.hash)throw error('score_source_changed');
     if(prior&&retryConfirmed!==true)return prior; // Never automatically resend an unknown submission.
-    if(prior&&!['unknown','submitting','failed'].includes(prior.status))throw error('score_retry_not_allowed');
+    if(prior&&!['unknown','submitting','failed','rate_limited'].includes(prior.status))throw error('score_retry_not_allowed');
     if((prior?.attempts?.length||0)>=20)throw error('score_retry_limit');
+    await guard('submit');
     let value={provider,hash:source.hash,inputKind:source.inputKind,createdAt:new Date().toISOString(),status:'submitting'};
     if(prior){const {attempts=[],...previous}=prior;value.attempts=[...attempts,previous];}
     await save(id,provider,value);
     try{
      {const response=await request(PUBLIC+'/api/v1/submissions',{svg:source.svg});value={...value,...publicResult(response.submission)};}
      value.checkedAt=new Date().toISOString();return await save(id,provider,value);
-    }catch(e){await save(id,provider,{...value,status:'unknown',message:e.code||'score_remote_failed',...(e.httpStatus?{httpStatus:e.httpStatus}:{}),checkedAt:new Date().toISOString()});throw e;}
+    }catch(e){await save(id,provider,{...value,status:e.code==='score_rate_limited'?'rate_limited':'unknown',...(e.retryAt?{retryAt:e.retryAt,retrySource:e.retrySource}:{}),message:e.code||'score_remote_failed',...(e.httpStatus?{httpStatus:e.httpStatus}:{}),checkedAt:new Date().toISOString()});throw e;}
    }finally{active=false;}
   },
   async refresh({id,provider}){

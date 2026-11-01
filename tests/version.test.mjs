@@ -50,3 +50,19 @@ test('release metadata matches the packaged service and update manifest',async()
   assert.equal(manifest.build,build.build);assert.ok(files.has('release.mjs'));
  }finally{await rm(output,{recursive:true,force:true});}
 });
+
+test('update progress is fresh despite cached version metadata and projects only safe fields',async()=>{
+ const state=await mkdtemp(path.join(os.tmpdir(),'biuuka-progress-'));let calls=0,time=Date.now();
+ try{
+  await writeFile(path.join(state,'build-info.json'),JSON.stringify({build:'a'.repeat(64)}));
+  const v=createVersion({appDir:state,state,now:()=>time,request:async()=>{calls++;return new Response(JSON.stringify({version:'0.0.24',build:'b'.repeat(64),updateProtocol:1}));}});
+  const receipt={status:'running',phase:'downloading',receivedBytes:20,totalBytes:100,updatedAt:new Date(time).toISOString(),path:'/private/fixture',token:'fixture-secret',reason:'arbitrary private message'};
+  await writeFile(path.join(state,'update-status.json'),JSON.stringify(receipt));
+  let result=await v.status();assert.deepEqual(result.update,{status:'running',phase:'downloading',updatedAt:receipt.updatedAt,receivedBytes:20,totalBytes:100});
+  receipt.receivedBytes=50;await writeFile(path.join(state,'update-status.json'),JSON.stringify(receipt));
+  assert.equal((await v.status()).update.receivedBytes,50);assert.equal(calls,1);
+  time+=120001;assert.equal((await v.status()).update.status,'interrupted');
+  const offline=createVersion({appDir:state,state,background:()=>false,allowed:()=>false,request:()=>assert.fail('offline request')});
+  assert.equal((await offline.status()).update.receivedBytes,50);
+ }finally{await rm(state,{recursive:true,force:true});}
+});

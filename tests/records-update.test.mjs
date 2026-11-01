@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm,readFile,mkdir,writeFile} from 'node:fs/promises';
 import os from 'node:os';import path from 'node:path';
 import {Records} from '../chatgpt/records.mjs';
-import {stageUpdate,unpack} from '../core/update.mjs';
+import {stageUpdate,unpack,compatibleSources} from '../core/update.mjs';
 import {packageBiuuka} from '../package.mjs';
 test('records persist, recover interrupted tests, omit content from lists and delete only the selected record',async()=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'biuuka-records-'));try{
@@ -25,7 +25,7 @@ test('updater checks full package hash and native dependency compatibility befor
  await writeFile(path.join(current,'sources.json'),await readFile(new URL('../sources.json',import.meta.url)));
  const metadata=JSON.parse(await readFile(path.join(output,'latest.json'),'utf8')),zip=await readFile(path.join(output,'biuuka.zip'));
  globalThis.fetch=async url=>new Response(url.endsWith('latest.json')?JSON.stringify(metadata):zip);
- const staged=await stageUpdate(root,current);assert.equal(staged.build,metadata.build);assert.ok(unpack(zip).has('supervisor.mjs'));
+ const progress=[];const staged=await stageUpdate(root,current,undefined,async value=>progress.push(value));assert.deepEqual([...new Set(progress.map(p=>p.phase))],['checking','downloading','verifying','staging']);assert.equal(progress.filter(p=>p.phase==='downloading').at(-1).receivedBytes,zip.length);assert.equal(progress.filter(p=>p.phase==='downloading').at(-1).totalBytes,null);assert.equal(staged.build,metadata.build);assert.ok(unpack(zip).has('supervisor.mjs'));
  assert.equal(JSON.parse(await readFile(path.join(staged.next,'build-info.json'),'utf8')).build,metadata.build);
  metadata.files['biuuka.zip'].sha256='0'.repeat(64);await assert.rejects(stageUpdate(root,current),/checksum/);
  metadata.files['biuuka.zip'].sha256=JSON.parse(await readFile(path.join(output,'latest.json'),'utf8')).files['biuuka.zip'].sha256;
@@ -115,4 +115,13 @@ test('Codex deletion checks ownership, tolerates already deleted threads, and pr
   else await operation;
   assert.equal(calls.includes('thread/delete'),['owned','failure'].includes(mode));
  }
+});
+
+test('native compatibility ignores mirrors but rejects changed payloads and empty metadata',async()=>{
+ const sources=JSON.parse(await readFile(new URL('../sources.json',import.meta.url),'utf8')),mirror=structuredClone(sources);
+ for(const item of Object.values(mirror)){item.node.mirrors=[];item.codex.url='https://fixture.invalid/archive';delete item.node.cacheFile;}
+ assert.equal(compatibleSources(sources,mirror),true);
+ mirror['win32-x64'].codex.digest='different';assert.equal(compatibleSources(sources,mirror),false);
+ const binary=structuredClone(sources);binary['win32-x64'].binary='other.exe';assert.equal(compatibleSources(sources,binary),false);
+ assert.equal(compatibleSources({},{}),false);assert.equal(compatibleSources(null,sources),false);
 });

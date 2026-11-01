@@ -1,6 +1,6 @@
 import {mkdir,readFile,writeFile,rename,rm} from 'node:fs/promises';
 import path from 'node:path';import {createHash,randomUUID} from 'node:crypto';
-const PUBLIC='https://pelicanscore.com',SELF='https://biuuka.com/partner-score/score';
+const PUBLIC='https://pelicanscore.com';
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const error=code=>Object.assign(Error(code),{code});
 export function scoringInput(answer){
@@ -21,7 +21,7 @@ const text=x=>typeof x==='string'?x.slice(0,2000):'';
 function publicResult(s){
  if(!s||!uuid.test(s.publicId))throw error('score_response_invalid');
  const result={remoteId:s.publicId,resultUrl:PUBLIC+'/result/'+s.publicId,status:['completed','failed'].includes(s.status)?s.status:'pending'};
- if(result.status==='failed')return {...result,message:text(s.errorMessage)||'第三方评分失败'};
+ if(result.status==='failed')return {...result,machineScore:number(s.machineScore,20),judge:text(s.judgeModel),errorCode:text(s.errorCode),message:s.errorCode==='INVALID_JUDGE_RESPONSE'?'第三方视觉评委返回了无效分数，未生成总分。作品已上传，刷新只查询原任务，不会重复发布。':text(s.errorMessage)||'第三方评分失败'};
  if(result.status!=='completed')return result;
  if(s.isMock===true||s.renderNeedsReview===true)return {...result,status:'unverified',message:'第三方返回模拟评分或待复核结果，未作为正式分数。'};
  const score=number(s.totalScore);if(score===null)throw error('score_response_invalid');
@@ -29,14 +29,7 @@ function publicResult(s){
  for(const [key,label] of [['pelican','鹈鹕'],['bicycle','自行车'],['ridingRelationship','骑乘关系'],['mechanics','机械合理性'],['composition','构图']]){const d=s.judgeResult?.[key];if(d)details.push({name:label,score:number(d.score),maxScore:number(d.maxScore),reason:text(d.reason)});}
  return {...result,score,maxScore:100,mode:'third-party',machineScore:number(s.machineScore,20),visionScore:number(s.visionScore,80),details,feedback:text(s.judgeResult?.summary),version:text(s.scoringVersion),judge:text(s.judgeModel),judgePromptVersion:text(s.judgePromptVersion)};
 }
-function structuralResult(s){
- if(s?.provider!=='openenv'||s.mode!=='structure-only'||s.judged!==false||number(s.score)===null)throw error('score_response_invalid');
- const structure=s.breakdown?.structure,checks=structure?.checks;
- const labels={wheel_count:'车轮数量',wheels_similar_size:'车轮大小相近',wheels_level:'车轮水平对齐',wheels_apart:'车轮间距',frame_spans_wheels:'车架连接车轮',rider_present:'骑乘者形状',rider_proportionate:'骑乘者比例'};
- const details=checks&&typeof checks==='object'&&!Array.isArray(checks)?Object.entries(checks).slice(0,30).map(([name,passed])=>({name:labels[name]||text(name),passed:passed===true,reason:text(structure.details?.[name])})):[];
- return {status:'completed',mode:'structure-only',judged:false,score:s.score,maxScore:100,version:text(s.version),feedback:text(s.feedback),gatePassed:s.gatePassed===true,details};
-}
-export function createScoring({state,records,online,fetcher=fetch,selfUrl=SELF}){
+export function createScoring({state,records,online,fetcher=fetch}){
  const root=path.join(state,'scores');let active=false;
  const file=(id,p)=>{if(!uuid.test(id)||!['openenv','pelicanscore'].includes(p))throw error('score_input_invalid');return path.join(root,id+'-'+p+'.json');};
  const load=async(id,p)=>{try{return JSON.parse(await readFile(file(id,p),'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
@@ -70,7 +63,7 @@ export function createScoring({state,records,online,fetcher=fetch,selfUrl=SELF})
   async list(id){await records.get(id);const values=await Promise.all(['openenv','pelicanscore'].map(p=>load(id,p)));return {scores:values.filter(Boolean)};},
   async remove(id){if(active)throw error('score_busy');await Promise.all([...['openenv','pelicanscore'].map(p=>rm(file(id,p),{force:true})),rm(sourceFile(id),{force:true})]);},
   async submit({id,provider,publicConfirmed,snapshotSvg}){
-   file(id,provider);if(provider==='pelicanscore'&&publicConfirmed!==true)throw error('score_public_confirmation_required');
+   file(id,provider);if(provider==='openenv')throw error('score_provider_retired');if(provider==='pelicanscore'&&publicConfirmed!==true)throw error('score_public_confirmation_required');
    if(active)throw error('score_busy');if(!online())throw error('network_disabled');active=true;
    try{const source=await input(id,snapshotSvg),prior=await load(id,provider);
     if(prior?.hash===source.hash)return prior; // Never resend an unknown public submission.
@@ -78,18 +71,14 @@ export function createScoring({state,records,online,fetcher=fetch,selfUrl=SELF})
     if(prior)throw error('score_source_changed');
     await save(id,provider,value);
     try{
-     if(provider==='openenv')value={...value,...structuralResult(await request(selfUrl,{svg:source.svg}))};
-     else {const response=await request(PUBLIC+'/api/v1/submissions',{svg:source.svg});value={...value,...publicResult(response.submission)};}
+     {const response=await request(PUBLIC+'/api/v1/submissions',{svg:source.svg});value={...value,...publicResult(response.submission)};}
      value.checkedAt=new Date().toISOString();return await save(id,provider,value);
     }catch(e){await save(id,provider,{...value,status:provider==='pelicanscore'?'unknown':'failed',message:e.code||'score_remote_failed'});throw e;}
    }finally{active=false;}
   },
   async refresh({id,provider}){
    file(id,provider);await records.get(id);if(active)throw error('score_busy');const prior=await load(id,provider);if(!prior)throw error('score_not_found');
-   if(provider==='openenv'){
-    if(prior.status!=='failed'&&prior.status!=='submitting')return prior;
-    await rm(file(id,provider),{force:true});return this.submit({id,provider});
-   }
+   if(provider==='openenv')return {...prior,retired:true};
    if(!prior.remoteId||!uuid.test(prior.remoteId))throw error('score_unknown_submission');
    active=true;try{return await save(id,provider,{...prior,...publicResult((await request(PUBLIC+'/api/v1/submissions/'+prior.remoteId)).submission),checkedAt:new Date().toISOString()});}finally{active=false;}
   }

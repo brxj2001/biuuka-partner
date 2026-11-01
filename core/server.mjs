@@ -240,7 +240,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
     busy = true;
     activeGrant=!master&&!website?access.idFor(grantToken,requestOrigin):null;
     const grantTimer=activeGrant?setInterval(()=>{if(!permittedResponse())activeBridge?.close('cancelled');},1000):null;
-    let bridge, record;
+    let bridge, record, recordStarted;
     const disconnected = () => bridge?.close('cancelled');
     res.on('close', disconnected);
     try {
@@ -265,20 +265,26 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
       }
       if(['/records','/record','/record/delete'].includes(req.url)){
         if(!records){json(404,{error:'records_unavailable'});return;}
-        if(req.url==='/records'){json(200,{records:await records.list()});return;}
-        if(req.url==='/record'){json(200,await records.get(input.id));return;}
+        if(req.url==='/records'){json(200,{records:(await records.list()).map(({account,...r})=>r)});return;}
+        if(req.url==='/record'){const {account,...publicRecord}=await records.get(input.id);json(200,publicRecord);return;}
         await removeRecord(input.id);json(200,{deleted:true});return;
       }
       await accountPoll?.cancel();
-      if(records&&['/test','/chat'].includes(req.url))record=await records.begin({model:input.model,effort:input.effort,preset:input.preset||'chat',prompt:input.prompt||PRESETS.find(p=>p.id===(input.preset||'pelican'))?.prompt});
+      if(records&&['/test','/chat'].includes(req.url)){recordStarted=performance.now();record=await records.begin({account:null,model:input.model,effort:input.effort,preset:req.url==='/chat'?'chat':input.preset||'pelican',prompt:input.prompt||PRESETS.find(p=>p.id===(input.preset||'pelican'))?.prompt});}
       if(!online())throw Error("cancelled");
       bridge = activeBridge = bridgeFactory(); await bridge.initialize();
+      if(record){
+        // Capture only the execution bridge's confirmed identity, never the current UI/cache account or credentials.
+        const identity=bridge.account;
+        record.account=identity?.type==='chatgpt'&&typeof identity.email==='string'&&identity.email.trim()?{email:identity.email.trim().slice(0,256)}:null;
+        await records.put(record);
+      }
       if (req.url === '/history') { json(200, await bridge.history()); return; }
       if (req.url === '/account') { json(200, await bridge.profile()); return; }
       if (req.url === '/models') { json(200, { models: await bridge.models() }); return; }
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });
       res.flushHeaders();
-      const started = Date.now();
+      const started = recordStarted ?? performance.now();
       const emit = event => { if(!permittedResponse()){bridge?.close('cancelled');return;}if(record){if(event.type==='delta')record.answer+=event.text||'';if(event.type==='thread'){record.threadId=event.threadId;record.saved=!!event.saved;}} if (!res.destroyed) res.write(JSON.stringify(event) + '\n'); };
       const threadId = req.url === '/chat' ? await bridge.conversation(input.model, input.effort, emit, input.prompt) : await bridge.test(input.model, input.effort, emit, input.preset);
       await bridge.finish();
@@ -287,8 +293,8 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
       await bridge.verifySaved(threadId);
       await bridge.finish();
       emit({ type: 'thread', threadId, saved: true });
-      if(record){record.status='complete';record.elapsedMs=Date.now()-started;await records.put(record);}
-      emit({ type: 'done', elapsedMs: Date.now() - started }); res.end();
+      if(record){record.status='complete';record.finishedAt=new Date().toISOString();record.elapsedMs=Math.max(0,Math.round(performance.now()-started));await records.put(record);}
+      emit({ type: 'done', elapsedMs: Math.max(0,Math.round(performance.now()-started)) }); res.end();
       if (refreshMs > 0) void refreshProfile();
     } catch (error) {
       if(record){record.status=res.destroyed?'cancelled':'failed';}
@@ -299,7 +305,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
         if (res.headersSent) res.end(JSON.stringify({ type: 'error', error: code }) + '\n');
         else json(502, { error: code });
       }
-    } finally { bridge?.close(); activeBridge=null;activeGrant=null;if(grantTimer)clearInterval(grantTimer); if(record&&record.status!=='complete'){if(record.status==='running')record.status=res.destroyed?'cancelled':'interrupted';await records.put(record).catch(()=>{});} busy = false; res.off('close', disconnected); }
+    } finally { bridge?.close(); activeBridge=null;activeGrant=null;if(grantTimer)clearInterval(grantTimer); if(record&&record.status!=='complete'){if(record.status==='running')record.status=res.destroyed?'cancelled':'interrupted';record.finishedAt=new Date().toISOString();record.elapsedMs=Math.max(0,Math.round(performance.now()-recordStarted));await records.put(record).catch(()=>{});} busy = false; res.off('close', disconnected); }
   });
   live=attachLive(server,{hosts,token,access,snapshot:()=>({service:'biuuka',version:VERSION,engine:enabled()?'enabled':'disabled',control:!!control,refreshMs,networkRefreshMs:300000,networkEnabled:control?.settings?.().networkEnabled!==false,network:online()?networkReport||null:null,update:updateInfo||null,profile:enabled()?profile||null:null,error:profileError?'account_unavailable':null})});
   server.requestTimeout=15000;server.headersTimeout=10000;server.keepAliveTimeout=5000;server.maxHeadersCount=32;

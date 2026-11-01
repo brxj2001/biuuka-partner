@@ -7,4 +7,4 @@ export type Account={id:string;email:string;plan:string;name:string;current:bool
 export type Accounts={current:string|null;accounts:Account[];busy:boolean;operation?:string;storeError?:string;login?:{status:string;authUrl?:string};switchResult?:{status:string}};
 export type Status={platform:string;architecture:string;node:string;codex:string;dataDirectory:string;codexHome:string;cacheBytes:number;tray:{running:boolean};settings:{engineEnabled:boolean;networkEnabled:boolean;autoUpdate:boolean;notifications:boolean;boundaryVersion?:number};grants:{id:string;origin:string;scopes:string[];expiresAt:number|null;expired:boolean}[];dependencies?:{node:{latest?:string};codex:{latest?:string};note:string}};
 export type Version={version:string;state:string;build?:string};
-export type RecordItem={id:string;createdAt:string;preset:string;status:string;answer?:string};
+export type RecordItem={id:string;createdAt:string;preset:string;status:string;answer?:string;account?:{email?:string}|null;model?:string;effort?:string;elapsedMs?:number;finishedAt?:string};

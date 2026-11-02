@@ -10,5 +10,5 @@ export function visualResult(s){
  if(Object.keys(labels).some(k=>typeof j.checklist[k]!=='boolean'))fail();
  const expected=(b.structure_score*.35+b.semantic_score*.65)*100;
  if(typeof s.score!=='number'||!Number.isFinite(s.score)||Math.abs(s.score-expected)>.02)fail();
- return {status:'completed',mode:'vision',score:s.score,maxScore:100,machineScore:Math.round(b.structure_score*3500)/100,visionScore:Math.round(b.semantic_score*6500)/100,machineMax:35,visionMax:65,judge:text(s.model),version:text(s.version),caption:text(j.caption),details:Object.entries(labels).map(([k,name])=>({name,passed:j.checklist[k]})),feedback:'按 OpenEnv 规则评价画面与结构；与 Pelican Score 的评分标准不同，分数不能直接比较。',message:'',httpStatus:null};
+ return {status:'completed',mode:'vision',score:s.score,maxScore:100,machineScore:Math.round(b.structure_score*3500)/100,visionScore:Math.round(b.semantic_score*6500)/100,machineMax:35,visionMax:65,judge:text(s.model),version:text(s.version),caption:text(j.caption),details:Object.entries(labels).map(([k,name])=>({name,passed:j.checklist[k]})),feedback:'按 OpenEnv 规则评价画面与结构，分数表示作品符合绘图要求的程度。',message:'',httpStatus:null};
 }

@@ -76,3 +76,14 @@ test('visual bridge accepts only exact mall origin and explicit ticket, never br
  async function send(origin,body){return new Promise((resolve,reject)=>{const req=http.request({host:'127.0.0.1',port:server.address().port,path:'/visual-score/input',method:'POST',headers:{Host:'127.0.0.1:17322','Content-Type':'application/json',...(origin?{Origin:origin}:{})}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});req.on('error',reject);req.end(JSON.stringify(body));});}
  try{for(const origin of [undefined,'https://evil.invalid','https://biuuka.com.evil.invalid','https://shop.biuuka.com'])assert.equal(await send(origin,ticket),403);assert.equal(await send('https://biuuka.com',{ticket:'bad'}),400);assert.equal(await send('https://biuuka.com',{...ticket,id:f.record.id}),400);assert.equal(await send('https://biuuka.com',ticket),200);await f.service.remove(f.record.id);await assert.rejects(f.service.visualInput(ticket),{code:'score_ticket_expired'});}finally{server.closeAllConnections();await new Promise(r=>server.close(r));await f.close();}
 });
+test('anonymous visual score keeps CSRF but never sends an account or obeys third-party cooldown; queries do not repost',async()=>{
+ const calls=[];let key;
+ const f=await fixture(async(url,o)=>{calls.push({url,o});if(url.endsWith('/csrf'))return Response.json({data:{headerName:'X-CSRF-TOKEN',token:'fixture'}},{headers:{'Set-Cookie':'BIUUKA_SESSION=anonymous; Path=/; HttpOnly'}});
+ if(o.method==='POST'){const body=JSON.parse(o.body);key=body.requestKey;assert.deepEqual(Object.keys(body).sort(),['requestKey','svg']);assert.equal(o.headers.Cookie,'BIUUKA_SESSION=anonymous');assert.equal(o.headers['X-CSRF-TOKEN'],'fixture');}
+ return Response.json({data:{requestKey:key,status:'pending'}});});
+ try{await f.service.visualSubmit({id:f.record.id});await f.service.visualRefresh({id:f.record.id});await f.service.visualSubmit({id:f.record.id});assert.equal(calls.filter(c=>c.o.method==='POST').length,1);assert.equal(calls.length,4);f.offline();await assert.rejects(f.service.visualRefresh({id:f.record.id}),{code:'network_disabled'});}finally{await f.close();}
+});
+test('old unsubmitted placeholders migrate only after absence is confirmed, old accepted jobs are never resubmitted',async()=>{
+ let found=false,posts=0;const f=await fixture(async(url,o)=>{if(o.method==='POST')posts++;return found?Response.json({data:{requestKey:key,status:'legacy'}}):Response.json({}, {status:404});});let key;
+ try{const ticket=await f.service.visualStart({id:f.record.id});key=(await f.service.visualInput(ticket)).requestKey;found=true;assert.equal((await f.service.visualRefresh({id:f.record.id})).legacy,true);found=false;assert.equal((await f.service.visualRefresh({id:f.record.id})).status,'not_submitted');assert.equal(posts,0);}finally{await f.close();}
+});

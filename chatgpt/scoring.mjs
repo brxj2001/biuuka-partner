@@ -2,6 +2,7 @@ import {visualResult} from './visual-result.mjs';
 import {mkdir,readFile,writeFile,rename,rm} from 'node:fs/promises';
 import path from 'node:path';import {createHash,randomUUID,randomBytes} from 'node:crypto';
 const PUBLIC='https://pelicanscore.com';
+const VISUAL='https://biuuka.com/api/v1/public/visual-score';
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const error=code=>Object.assign(Error(code),{code});
 function transportError(e){
@@ -78,7 +79,51 @@ export function createScoring({state,records,online,fetcher=fetch,now=Date.now})
   }
   return scoringInput(record.answer);
  }
+ async function visualRequest(key,svg){
+  if(!online())throw error('network_disabled');
+  const abort=new AbortController(),timer=setInterval(()=>{if(!online())abort.abort();},200);
+  const options={redirect:'error',signal:AbortSignal.any([abort.signal,AbortSignal.timeout(30000)])};
+  const decode=async r=>{let size=0,parts=[];for await(const b of r.body){size+=b.length;if(size>262144)throw error('score_response_invalid');parts.push(b);}try{return JSON.parse(Buffer.concat(parts));}catch{throw error('score_response_invalid');}};
+  try{
+   let headers={};
+   if(svg!==undefined){
+    const csrf=await fetcher('https://biuuka.com/api/v1/auth/csrf',options);
+    if(!csrf.ok)throw error('score_remote_failed');
+    const cookie=csrf.headers.getSetCookie().map(c=>c.split(';')[0]).filter(c=>c.startsWith('BIUUKA_SESSION=')).join('; '),data=(await decode(csrf)).data;
+    if(!cookie||data?.headerName!=='X-CSRF-TOKEN'||typeof data.token!=='string')throw error('score_response_invalid');
+    headers={'Content-Type':'application/json',Cookie:cookie,'X-CSRF-TOKEN':data.token};
+   }
+   if(!online())throw error('network_disabled');
+   const r=await fetcher(svg===undefined?VISUAL+'/'+key:VISUAL,{...options,method:svg===undefined?'GET':'POST',headers,...(svg===undefined?{}:{body:JSON.stringify({requestKey:key,svg})})});
+   if(!r.ok){await r.body?.cancel();throw Object.assign(error(r.status===404?'score_not_found':r.status===409?'score_busy':'score_remote_failed'),{httpStatus:r.status});}
+   const data=(await decode(r)).data;if(data?.requestKey!==key)throw error('score_response_invalid');return data;
+  }catch(e){if(!online())throw error('network_disabled');throw transportError(e);}finally{clearInterval(timer);}
+ }
+ async function visualDirect({id,snapshotSvg,refresh=false}){
+  if(!online())throw error('network_disabled');if(active)throw error('score_busy');active=true;
+  try{const source=await input(id,snapshotSvg),prior=await load(id,'openenv-vision');
+   if(prior&&prior.hash!==source.hash)throw error('score_source_changed');
+   if(prior?.status==='completed')return prior;
+   if(prior&&!prior.anonymous){
+    try{await visualRequest(prior.requestKey);return {legacy:true};}catch(e){if(e.httpStatus!==404)throw e;}
+    // The old UI created a local placeholder before login. No server task exists, so allow explicit anonymous submission with the same key.
+    return await save(id,'openenv-vision',{...prior,anonymous:true,status:'not_submitted',message:'旧版仅创建了本机记录，尚未提交；可直接确认评分。'});
+   }
+   if(refresh&&!prior)throw error('score_not_found');
+   const value=prior||{provider:'openenv-vision',anonymous:true,hash:source.hash,inputKind:source.inputKind,requestKey:randomUUID(),status:'submitting',createdAt:new Date().toISOString()};
+   await save(id,'openenv-vision',value);
+   try{
+    let data;
+    // An existing request is only queried. Even a timeout/restart must never create another model call.
+    if(prior&&(refresh||prior.status!=='not_submitted'))data=await visualRequest(value.requestKey);else data=await visualRequest(value.requestKey,source.svg);
+    let projection;if(data.status==='completed')projection=visualResult(data.result);else if(['pending','unknown','failed','rejected','expired'].includes(data.status))projection={status:data.status,message:text(data.message)};else throw error('score_response_invalid');
+    return await save(id,'openenv-vision',{...value,...projection,checkedAt:new Date().toISOString()});
+   }catch(e){await save(id,'openenv-vision',{...value,status:e.httpStatus===404||(!prior&&e.httpStatus===409)?'not_submitted':'unknown',message:e.httpStatus===404?'尚未取得服务器任务，可确认提交。':e.code||'score_remote_failed',checkedAt:new Date().toISOString()});throw e;}
+  }finally{active=false;}
+ }
  return {
+  visualSubmit:args=>visualDirect(args),
+  visualRefresh:args=>visualDirect({...args,refresh:true}),
   async visualStart({id,snapshotSvg}){
    if(!online())throw error('network_disabled');if(active)throw error('score_busy');active=true;
    try{const source=await input(id,snapshotSvg),prior=await load(id,'openenv-vision');

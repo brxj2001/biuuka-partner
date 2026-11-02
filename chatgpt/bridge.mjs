@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
-export const PRESETS = Object.freeze([{"id":"pelican","name":"鹈鹕测试","prompt":"Generate an SVG of a pelican riding a bicycle"},{"id":"candy","name":"糖果测试","prompt":"在一个黑色的袋子里放有三种口味的糖果，每种糖果有圆形和五角星形。已知数量如下：圆形苹果、桃子、西瓜分别为 7、9、8 颗；五角星形苹果、桃子、西瓜分别为 7、6、4 颗。最少取出多少个糖果，才能保证手中同时拥有不同形状的苹果味和桃子味糖果？"}].map(Object.freeze));
+export const PRESETS = Object.freeze([{"id":"pelican","name":"鹈鹕测试","prompt":"请生成一个完整、可直接在浏览器打开的 HTML 作品：一只鹈鹕在日出时分骑自行车穿过安静的城市。必须包含可见的鹈鹕、自行车、城市和日出元素，并使用内联 CSS 或 SVG 制作动画。只输出完整 HTML 源码，不要解释过程，不要使用 Markdown 代码围栏。"},{"id":"candy","name":"糖果测试","prompt":"在一个黑色的袋子里放有三种口味的糖果，每种糖果有圆形和五角星形。已知数量如下：圆形苹果、桃子、西瓜分别为 7、9、8 颗；五角星形苹果、桃子、西瓜分别为 7、6、4 颗。最少取出多少个糖果，才能保证手中同时拥有不同形状的苹果味和桃子味糖果？"}].map(Object.freeze));
 
 export class BridgeError extends Error {
   constructor(code) { super(code); this.code = code; }

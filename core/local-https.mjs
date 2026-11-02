@@ -1,5 +1,5 @@
 import https from 'node:https';
-import {readFile,mkdir,mkdtemp,rename,rm,lstat,chmod} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,mkdtemp,rename,rm,lstat,chmod} from 'node:fs/promises';
 import {X509Certificate,createPrivateKey} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import path from 'node:path';
@@ -22,7 +22,9 @@ export async function prepareIdentity(state){
  try{await lstat(target);throw Error('https_existing_identity_incomplete');}catch(e){if(e.code!=='ENOENT')throw e;}
  const stage=await mkdtemp(path.join(state,'.https-'));await chmod(stage,0o700);
  try{
-  execFileSync('/usr/bin/openssl',['req','-x509','-newkey','rsa:2048','-nodes','-sha256','-days','365','-subj','/CN=Biuuka Local HTTPS','-keyout',path.join(stage,'key.pem'),'-out',path.join(stage,'cert.pem'),'-config','/dev/stdin','-extensions','server'],{input:'[req]\ndistinguished_name=dn\n[dn]\n[server]\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n',stdio:['pipe','ignore','pipe'],timeout:30000});
+  const configFile=path.join(stage,'openssl.cnf');await writeFile(configFile,'[req]\ndistinguished_name=dn\n[dn]\n[server]\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n',{mode:0o600});
+  execFileSync('/usr/bin/openssl',['req','-x509','-newkey','rsa:2048','-nodes','-sha256','-days','365','-subj','/CN=Biuuka Local HTTPS','-keyout',path.join(stage,'key.pem'),'-out',path.join(stage,'cert.pem'),'-config',configFile,'-extensions','server'],{stdio:['pipe','ignore','pipe'],timeout:30000});
+  await rm(configFile);
   await chmod(path.join(stage,'key.pem'),0o600);await chmod(path.join(stage,'cert.pem'),0o600);await rename(stage,target);return await readIdentity(state);
  }finally{await rm(stage,{recursive:true,force:true});}
 }

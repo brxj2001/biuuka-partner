@@ -69,3 +69,7 @@ test('explicit confirmation of an old local placeholder checks absence and submi
  let posts=0,key;const f=await fixture(async(url,o)=>{if(url.endsWith('/csrf'))return Response.json({data:{headerName:'X-CSRF-TOKEN',token:'fixture'}},{headers:{'Set-Cookie':'BIUUKA_SESSION=anonymous; Path=/'}});if(o.method==='POST'){posts++;assert.equal(JSON.parse(o.body).requestKey,key);return Response.json({data:{requestKey:key,status:'pending'}});}return Response.json({}, {status:404});});
  try{const t=await f.service.visualStart({id:f.record.id});key=(await f.service.visualInput(t)).requestKey;assert.equal((await f.service.visualSubmit({id:f.record.id})).status,'pending');assert.equal(posts,1);}finally{await f.close();}
 });
+test('an upload rejected with 413 is not an accepted scoring task',async()=>{
+ const f=await fixture(async(url)=>url.endsWith('/csrf')?Response.json({data:{headerName:'X-CSRF-TOKEN',token:'fixture'}},{headers:{'Set-Cookie':'BIUUKA_SESSION=anonymous; Path=/'}}):Response.json({}, {status:413}));
+ try{await assert.rejects(f.service.visualSubmit({id:f.record.id}),{code:'score_upload_too_large'});const s=(await f.service.list(f.record.id)).scores[0];assert.equal(s.status,'not_submitted');assert.equal(s.message,'score_upload_too_large');}finally{await f.close();}
+});

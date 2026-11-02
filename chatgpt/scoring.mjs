@@ -60,7 +60,7 @@ export function createScoring({state,records,online,fetcher=fetch,now=Date.now})
    }
    if(!online())throw error('network_disabled');
    const r=await fetcher(svg===undefined?VISUAL+'/'+key:VISUAL,{...options,method:svg===undefined?'GET':'POST',headers,...(svg===undefined?{}:{body:JSON.stringify({requestKey:key,svg})})});
-   if(!r.ok){await r.body?.cancel();throw Object.assign(error(r.status===404?'score_not_found':r.status===409?'score_busy':'score_remote_failed'),{httpStatus:r.status});}
+   if(!r.ok){await r.body?.cancel();throw Object.assign(error(r.status===404?'score_not_found':r.status===409?'score_busy':r.status===413?'score_upload_too_large':'score_remote_failed'),{httpStatus:r.status});}
    const data=(await decode(r)).data;if(data?.requestKey!==key)throw error('score_response_invalid');return data;
   }catch(e){if(!online())throw error('network_disabled');throw transportError(e);}finally{clearInterval(timer);}
  }
@@ -85,7 +85,7 @@ export function createScoring({state,records,online,fetcher=fetch,now=Date.now})
     if(querying)data=await visualRequest(value.requestKey);else data=await visualRequest(value.requestKey,source.svg);
     let projection;if(data.status==='completed')projection=visualResult(data.result);else if(['pending','unknown','failed','rejected','expired'].includes(data.status))projection={status:data.status,message:text(data.message)};else throw error('score_response_invalid');
     return await save(id,'openenv-vision',{...value,...projection,checkedAt:new Date().toISOString()});
-   }catch(e){const saved=await save(id,'openenv-vision',{...value,status:e.httpStatus===404||(!prior&&e.httpStatus===409)?'not_submitted':'unknown',message:e.httpStatus===404?'':e.code||'score_remote_failed',checkedAt:new Date().toISOString()});
+   }catch(e){const saved=await save(id,'openenv-vision',{...value,status:e.httpStatus===413||e.httpStatus===404||(!prior&&e.httpStatus===409)?'not_submitted':'unknown',message:e.httpStatus===404?'':e.code||'score_remote_failed',checkedAt:new Date().toISOString()});
     // Confirmed absence is recoverable, but querying must never resubmit.
     if(querying&&e.httpStatus===404)return saved;throw e;}
   }finally{active=false;}

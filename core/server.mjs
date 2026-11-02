@@ -146,7 +146,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
     }
     if(req.method==='GET'&&req.url==='/health'){
       if(external&&!website&&!access.permits(grantToken,requestOrigin,'account')&&!access.permits(grantToken,requestOrigin,'test'))return json(401,{error:'pairing_required'});
-      return json(200,{service:'biuuka',uiInstance,version:VERSION,installed:true,engine:enabled()?'enabled':'disabled',networkEnabled:control?.settings?.().networkEnabled!==false,control:!!control,live:true,refreshMs});
+      return json(200,{service:'biuuka',uiInstance,controlPort:port,version:VERSION,installed:true,engine:enabled()?'enabled':'disabled',networkEnabled:control?.settings?.().networkEnabled!==false,control:!!control,live:true,refreshMs});
     }
     if(req.method==='GET'&&url.pathname.startsWith('/_next/')&&!external){
       try{const name=(await assets()).routes[url.pathname];
@@ -326,7 +326,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
       }
     } finally { bridge?.close(); activeBridge=null;activeGrant=null;if(grantTimer)clearInterval(grantTimer); if(record&&record.status!=='complete'){if(record.status==='running')record.status=res.destroyed?'cancelled':'interrupted';record.finishedAt=new Date().toISOString();record.elapsedMs=Math.max(0,Math.round(performance.now()-recordStarted));await records.put(record).catch(()=>{});} busy = false; res.off('close', disconnected); }
   });
-  live=attachLive(server,{hosts,token,access,snapshot:()=>({service:'biuuka',uiInstance,version:VERSION,engine:enabled()?'enabled':'disabled',control:!!control,refreshMs,networkRefreshMs:300000,networkEnabled:control?.settings?.().networkEnabled!==false,network:online()?networkReport||null:null,update:updateInfo||null,profile:enabled()?profile||null:null,error:profileError?'account_unavailable':null})});
+  live=attachLive(server,{hosts,token,access,snapshot:()=>({service:'biuuka',uiInstance,controlPort:port,version:VERSION,engine:enabled()?'enabled':'disabled',control:!!control,refreshMs,networkRefreshMs:300000,networkEnabled:control?.settings?.().networkEnabled!==false,network:online()?networkReport||null:null,update:updateInfo||null,profile:enabled()?profile||null:null,error:profileError?'account_unavailable':null})});
   server.requestTimeout=15000;server.headersTimeout=10000;server.keepAliveTimeout=5000;server.maxHeadersCount=32;
   let timer;
   server.once('listening', () => {

@@ -7,6 +7,7 @@ import { macService } from '../scripts/install/mac-service.mjs';
 const [action = 'help', ...args] = process.argv.slice(2);
 const help = `Biuuka ${VERSION} — local Codex service
 biuuka status | doctor | start | stop | restart | open
+biuuka https prepare | status | trust --confirm-trust | remove --confirm-remove
 biuuka tray (open native tray; closing it leaves the service running)
 biuuka service-exit (fully exits the control service)
 biuuka login | account | quota | models | history
@@ -30,6 +31,15 @@ try {
   else if(action==='clear-cache')console.log(await(await localRequest('/control/cache/clear',{})).json());
   else if (action === 'network') console.log(JSON.stringify(await (await localRequest('/network', {})).json(), null, 2));
   else if (action === 'offline-pack') { const {offlinePack}=await import('../scripts/install/offline.mjs');await offlinePack(args[0],args[1]); }
+  else if(action==='https'){
+    if(process.platform!=='darwin')throw Error('HTTPS setup currently supports macOS only.');
+    const {prepareIdentity,readIdentity,trustIdentity,removeIdentity}=await import('./local-https.mjs');
+    if(args[0]==='remove'){if(args[1]!=='--confirm-remove')throw Error('Confirm certificate removal with --confirm-remove');await removeIdentity(stateDir);console.log('Local HTTPS certificate and its user trust removed. HTTP service is unchanged.');process.exit(0);}
+    if(!['prepare','status','trust'].includes(args[0]))throw Error('Choose https prepare, status or trust --confirm-trust');
+    const identity=args[0]==='prepare'?await prepareIdentity(stateDir):args[0]==='trust'?await trustIdentity(stateDir,{confirm:args[1]==='--confirm-trust'}):await readIdentity(stateDir);
+    console.log({fingerprint:identity.fingerprint,expiresAt:identity.expiresAt});
+    console.log(args[0]==='prepare'?'Certificate created locally. No system trust was changed. To explicitly trust it for local SSL: biuuka https trust --confirm-trust':'Certificate operation completed. Safari can retry the connection after trust is accepted.');
+  }
   else if (action === 'serve') await serve();
   else if(action==='stop'){console.log(await(await localRequest('/control/engine',{enabled:false})).json());console.log('Codex paused; local control remains online. Resume: biuuka start');}
   else if(action==='start'){try{await localRequest('/health');}catch{if(process.platform==='darwin')await macService('start');else run('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join((await config()).baseDir||appDir,'windows.ps1'),'-Action','start']);await waitHealthy();}console.log(await(await localRequest('/control/engine',{enabled:true})).json());}

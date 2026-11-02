@@ -45,6 +45,7 @@ ${cleanupLabel?`/bin/launchctl remove ${quote(cleanupLabel)} 2>/dev/null || true
 }
 export async function uninstallMac(c,state){
  const plan=await macCleanupPlan({home:os.homedir(),state,base:c.baseDir,codexHome:c.codexHome,extraCodexHome:process.env.CODEX_HOME});
+ if(process.platform==='darwin')await (await import('../../core/local-https.mjs')).removeIdentityTrust(state);
  // Remove only the exact lines installed by Biuuka, preserving all other shell configuration.
  for(const name of ['.zprofile','.profile']){const file=path.join(plan.home,name);try{const stat=await lstat(file);if(!stat.isFile()||stat.isSymbolicLink())continue;const old=await readFile(file,'utf8'),next=old.replace(/\n# Biuuka PATH\nexport PATH="\$HOME\/\.local\/bin:\$PATH"\n/g,'\n');if(old!==next)await writeFile(file,next,{mode:stat.mode});}catch(e){if(e.code!=='ENOENT')throw e;}}
  const folders=[c.baseDir,path.join(state,'app')];

@@ -1,3 +1,4 @@
+import {startHttps,readIdentity} from './local-https.mjs';
 import {createScoring} from '../chatgpt/scoring.mjs';
 import {createInstallationInventory} from '../chatgpt/installation-inventory.mjs';
 import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
@@ -50,6 +51,11 @@ export async function serve() {
     try{await bridge.initialize({requireLogin:false});await bridge.request('thread/list',{limit:1,modelProviders:[]});}finally{clearInterval(cancel);await bridge.closeAndWait();}
   }}),accounts,localProfile:createLocalProfile(c.codexHome,stateDir),control,token,port,bridgeFactory:()=>makeBridge(c),records}),c.port);
   await writePrivate(runtimeFile, { token, port, pid: process.pid, version: VERSION });
+  let tls, tlsStarting=false, closing=false;
+  const refreshHttps=async()=>{if(process.platform!=='darwin'||closing||tlsStarting)return;tlsStarting=true;try{if(tls){const identity=await readIdentity(stateDir);if(identity.fingerprint===tls.fingerprint)return;tls.close();tls=null;}const candidate=await startHttps({state:stateDir,server,httpPort:port});if(closing)candidate.close();else tls=candidate;}catch{tls?.close();tls=null;}finally{tlsStarting=false;}};
+  void refreshHttps();const tlsTimer=setInterval(()=>void refreshHttps(),5000);tlsTimer.unref();
+  const closeHttps=()=>{closing=true;clearInterval(tlsTimer);tls?.close();};
+
   // This runs in the install user's interactive process, including upgrades from
   // older supervisors. Never start a tray that the user deliberately exited.
   const uiTimer=setTimeout(async()=>{
@@ -65,7 +71,7 @@ export async function serve() {
   },2000);uiTimer.unref();
 
   await rm(path.join(stateDir, 'last-error.json'), { force: true });
-  const stop = () => { server.closeAllConnections(); server.close(()=>{if(process.connected)process.disconnect();}); };
+  const stop = () => { closeHttps();server.closeAllConnections(); server.close(()=>{if(process.connected)process.disconnect();}); };
   process.on('disconnect',stop);
   let preparing=false;
   process.on('message', message=>{
@@ -79,7 +85,7 @@ export async function serve() {
           await restoreTrayAfterUpdate(stateDir,async()=>{const {startTray}=await import('../tray/tray.mjs');await startTray();});
           return;
         }
-        server.closeAllConnections();server.close(()=>process.exit(0));
+        closeHttps();server.closeAllConnections();server.close(()=>process.exit(0));
       }catch{
         await writePrivate(path.join(stateDir,'tray-update-status.json'),{status:'tray_stop_failed',at:new Date().toISOString()}).catch(()=>{});
       }finally{preparing=false;}

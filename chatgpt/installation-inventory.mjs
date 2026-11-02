@@ -3,7 +3,7 @@ import {execFile} from 'node:child_process';import {promisify} from 'node:util';
 import {detectInstances} from './instances.mjs';
 const exec=promisify(execFile),run=async(f,a)=>(await exec(f,a,{timeout:15000,maxBuffer:1024*1024,windowsHide:true,encoding:'utf8'})).stdout;
 const fail=()=>{throw Error('请填写已有应用包或程序文件的绝对路径，最多登记 32 个副本。');};
-export function createInstallationInventory({state,codex,platform=process.platform,home=os.homedir(),applicationDirs,envPath=process.env.PATH||'',execute=run,detect=()=>detectInstances({includePaths:true,includeOwned:true})}={}){
+export function createInstallationInventory({state,codex,baseDir,platform=process.platform,home=os.homedir(),applicationDirs,envPath=process.env.PATH||'',execute=run,detect=()=>detectInstances({includePaths:true,includeOwned:true})}={}){
  const file=path.join(state,'instance-installations.json');let cached,flight,mutation=Promise.resolve();
  const saved=async()=>{try{const value=JSON.parse(await readFile(file,'utf8'));if(!Array.isArray(value)||value.length>32)throw Error();return value.map(r=>{if(!r||!['chatgpt','codex-cli'].includes(r.kind)||typeof r.path!=='string'||!path.isAbsolute(r.path))throw Error();return {kind:r.kind,path:r.path,name:path.basename(r.path)};});}catch(e){if(e.code==='ENOENT')return [];throw Error('实例登记文件无法读取，未覆盖原文件。');}};
  const key=p=>platform==='win32'?p.toLowerCase():p;
@@ -27,7 +27,21 @@ export function createInstallationInventory({state,codex,platform=process.platfo
   const running=await Promise.all((runtime.instances||[]).map(async r=>({...r,key:await normalizeRuntime(r)}))),owned=await Promise.all((runtime.partnerInstances||[]).map(async r=>({...r,key:await normalizeRuntime(r)})));
   // Collapse a running macOS executable into its bundle entry.
   for(const [k,item] of found)if(platform==='darwin'&&item.kind==='chatgpt'&&item.path.includes('.app/Contents/')){const bundle=item.path.replace(/\.app\/Contents\/.*$/,'.app');if(found.has(key(bundle)))found.delete(k);}
-  const installations=[...found.values()].map(item=>({...item,pids:running.filter(r=>r.key===key(item.path)).map(r=>r.pid),partnerPids:owned.filter(r=>r.key===key(item.path)).map(r=>r.pid)}));
+  // Group only verified desktop entry points in the same installation directory.
+  // Different copied directories remain separate even when their names match.
+  const grouped=new Map();
+  for(const item of found.values()){
+   const group=platform==='win32'&&item.kind==='chatgpt'&&item.verified&&/^(chatgpt|codex)\.exe$/i.test(path.basename(item.path))?'desktop:'+key(path.dirname(item.path)):key(item.path);
+   if(!grouped.has(group))grouped.set(group,[]);grouped.get(group).push(item);
+  }
+  const managedRoot=baseDir?await realpath(path.join(baseDir,'runtime')).catch(()=>null):null;
+  const installations=[...grouped.values()].map(items=>{
+   items.sort((a,b)=>Number(/^chatgpt\.exe$/i.test(path.basename(b.path)))-Number(/^chatgpt\.exe$/i.test(path.basename(a.path))));
+   const item=items[0],paths=items.map(i=>i.path),keys=new Set(paths.map(key));
+   const relative=managedRoot?path.relative(managedRoot,item.path):null;
+   const bundled=item.kind==='codex-cli'&&relative!==null&&relative!==''&&!relative.startsWith('..'+path.sep)&&relative!=='..'&&!path.isAbsolute(relative);
+   return {...item,paths,manualPaths:items.filter(i=>i.manual).map(i=>i.path),bundled,partner:items.some(i=>i.partner),pids:running.filter(r=>keys.has(r.key)).map(r=>r.pid),partnerPids:owned.filter(r=>keys.has(r.key)).map(r=>r.pid)};
+  });
   return {...runtime,installations,inventoryWarnings:[...new Set(warnings)],inventoryCheckedAt:new Date().toISOString()};
  };
  const list=()=>{if(flight)return flight;if(cached&&Date.now()-cached.at<10000)return Promise.resolve(cached.value);flight=scan().then(value=>{cached={at:Date.now(),value};return value;}).finally(()=>{flight=null;});return flight;};

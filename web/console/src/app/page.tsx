@@ -33,7 +33,7 @@ export default function Console(){
   try{setDark(localStorage.getItem('biuuka-console-theme')==='dark');}catch{}
   void refresh().catch(e=>setNotice(message(e)));void loadAccounts().catch(()=>{});void appStatus().catch(()=>{});
   let stopped=false,healthPending=false,accountPending=false;
-  const health=async()=>{if(healthPending)return;healthPending=true;try{const r=await fetch('/health',{cache:'no-store'}),h=await r.json();if(stopped||h.service!=='biuuka')return;if(instance.current&&instance.current!==h.uiInstance){if(!busyRef.current)location.reload();return;}instance.current=h.uiInstance;}catch{if(!stopped)setConnected(false);}finally{healthPending=false;}};
+  const health=async()=>{if(healthPending)return;healthPending=true;try{const r=await fetch('/health',{cache:'no-store'}),h=await r.json();if(stopped||h.service!=='biuuka')return;if(instance.current&&instance.current!==h.uiInstance){if(!busyRef.current)location.reload();return;}instance.current=h.uiInstance;if(typeof h.version==="string")setVersion(v=>v||{version:h.version,state:"unknown"});}catch{if(!stopped)setConnected(false);}finally{healthPending=false;}};
   void health();const h=setInterval(()=>void health(),3000);
   const s=setInterval(()=>{if(!busyRef.current)void refresh().catch(()=>setConnected(false));},15000);
   const a=setInterval(()=>{if(accountPending)return;accountPending=true;void loadAccounts().catch(()=>{}).finally(()=>accountPending=false);},2500);

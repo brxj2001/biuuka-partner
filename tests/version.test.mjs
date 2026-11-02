@@ -66,3 +66,12 @@ test('update progress is fresh despite cached version metadata and projects only
   assert.equal((await offline.status()).update.receivedBytes,50);
  }finally{await rm(state,{recursive:true,force:true});}
 });
+
+test('matching build after reinstall supersedes stale failed receipts but retains active work',async()=>{
+ const state=await mkdtemp(path.join(os.tmpdir(),'biuuka-reinstalled-'));
+ try{await writeFile(path.join(state,'build-info.json'),JSON.stringify({build:'a'.repeat(64)}));
+ const v=createVersion({appDir:state,state,request:async()=>Response.json({version:'0.0.39',build:'a'.repeat(64),updateProtocol:1})});
+ await writeFile(path.join(state,'update-status.json'),JSON.stringify({status:'deferred',reason:'installer_required',targetVersion:'0.0.31'}));assert.equal((await v.status()).update,undefined);
+ await writeFile(path.join(state,'update-status.json'),JSON.stringify({status:'running',phase:'cleanup',updatedAt:new Date().toISOString()}));assert.equal((await v.status()).update.status,'running');
+ }finally{await rm(state,{recursive:true,force:true});}
+});

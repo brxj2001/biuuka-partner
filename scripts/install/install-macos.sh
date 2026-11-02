@@ -6,14 +6,17 @@ umask 077
 [ "$(id -u)" != 0 ] || { echo 'Run without sudo, as your desktop user.' >&2; exit 1; }
 MAJOR=$(sw_vers -productVersion | cut -d. -f1)
 [ "$MAJOR" -ge 14 ] || { echo 'Biuuka requires macOS 14 or newer.' >&2; exit 1; }
+echo "[1/6] Checking macOS and CPU architecture..."
 ARCH=$(uname -m)
 if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then ARCH=arm64; fi
 case "$ARCH" in arm64) NODE_ARCH=arm64; NODE_SHA=__NODE_ARM64_SHA__;; x86_64) NODE_ARCH=x64; NODE_SHA=__NODE_X64_SHA__;; *) echo 'Unsupported Mac architecture.' >&2; exit 1;; esac
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/biuuka-install.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT HUP INT TERM
+echo '[1/6] Verifying and unpacking Biuuka service files...'
 awk '/^__BIUUKA_PAYLOAD__$/{found=1;next} found{print}' "$0" | base64 -D > "$STAGE/package.zip"
 printf '%s  %s\n' '__PACKAGE_SHA__' "$STAGE/package.zip" | shasum -a 256 -c - >/dev/null
 unzip -q "$STAGE/package.zip" -d "$STAGE/app"
+echo '[2/6] Checking Node.js 24+...'
 NODE=$(command -v node || true)
 if [ -x "$HOME/.biuuka/base/runtime/selected-node/bin/node" ]; then
   mkdir -p "$STAGE/app/runtime"

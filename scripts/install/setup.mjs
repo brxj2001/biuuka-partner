@@ -162,6 +162,7 @@ export async function installMac() {
   const configFile = path.join(state, 'config.json');
   try {
     try { oldConfig = await readFile(configFile); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    console.log('[5/6] Switching Biuuka service files...');
     await unload();
     await rm(path.join(state,'app'),{recursive:true,force:true});
     await mkdir(path.dirname(finalDir), { recursive: true });
@@ -171,6 +172,7 @@ export async function installMac() {
     const bin = path.join(os.homedir(), '.local/bin'); await mkdir(bin, { recursive: true });
     await writeFile(path.join(bin, 'biuuka'), `#!/bin/sh\nexec ${shellQuote(config.node)} ${shellQuote(path.join(finalDir, 'launcher.mjs'))} "$@"\n`, { mode: 0o755 });
     await chmod(path.join(bin, 'biuuka'), 0o755);
+    console.log('[6/6] Registering background service and verifying localhost health...');
     const launch = spawnSync(config.node, [path.join(finalDir, 'cli.mjs'), 'install-service'], { stdio: 'inherit' });
     if (launch.status !== 0) throw Error('launchd registration or health check failed');
     for (const profile of ['.zprofile', '.profile']) {
@@ -179,6 +181,7 @@ export async function installMac() {
     }
     await rm(backup, { recursive: true, force: true });
     console.log('Biuuka installed and running. New terminals: biuuka status / biuuka open');
+    console.log('The local console opens below. For the mall connection use Chrome / Edge and allow local network access. Reinstallation is not required when only the browser cannot connect.');
     spawnSync(config.node, [path.join(finalDir, 'cli.mjs'), 'doctor'], { stdio: 'inherit' });
     console.log('If account verification failed: biuuka login. No chat request was sent during installation.');
     spawnSync(config.node,[path.join(finalDir,'cli.mjs'),'open'],{stdio:'ignore'});

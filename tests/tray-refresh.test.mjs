@@ -64,3 +64,12 @@ test('恢复时已有托盘不重复启动',async()=>{
  const state=await mkdtemp(path.join(os.tmpdir(),'biuuka-tray-update-'));
  try{await prepareTrayForUpdate(state,{read:async()=>({running:true}),close:async()=>({running:false})});assert.equal(await restoreTrayAfterUpdate(state,async()=>{throw Error('duplicate');},{read:async()=>({running:true})}),true);}finally{await rm(state,{recursive:true,force:true});}
 });
+
+import {trayAction} from '../tray/tray.mjs';
+test('通知开关直接保存本机设置并核验响应，限时八秒且不启动 CLI',async()=>{
+ for(const [action,value] of [['notify-on',true],['notify-off',false]]){
+  let calls=0;await trayAction(action,{request:async(route,body,options)=>{calls++;assert.equal(route,'/control/settings');assert.deepEqual(body,{notifications:value});assert.equal(options.timeout,8000);return {json:async()=>body};}});assert.equal(calls,1);
+ }
+ await assert.rejects(trayAction('notify-on',{request:async()=>({json:async()=>({notifications:false})})}),/not confirmed/);
+ await assert.rejects(trayAction('notify-on',{request:async()=>{throw Error('timeout');}}),/timeout/);
+});

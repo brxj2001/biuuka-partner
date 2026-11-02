@@ -147,7 +147,7 @@ function Invoke-TrayAction([string]$Action){
     if($Jobs.Count -or $script:Pending){return}
     try{
         $Info=New-Object Diagnostics.ProcessStartInfo;$Info.FileName=$Node;$Info.Arguments='"'+$Launcher+'" tray-action '+$Action
-        $Info.UseShellExecute=$false;$Info.CreateNoWindow=$true;$Process=[Diagnostics.Process]::Start($Info);$null=$Jobs.Add($Process)
+        $Info.UseShellExecute=$false;$Info.CreateNoWindow=$true;$Process=[Diagnostics.Process]::Start($Info);$null=$Process.Handle;$Process | Add-Member -NotePropertyName BiuukaDeadline -NotePropertyValue ([DateTime]::UtcNow.AddSeconds($(if($Action -like 'auto-*' -or $Action -like 'notify-*'){12}else{60})));$null=$Jobs.Add($Process)
         if($Action -in @('open','shop','updates')){$Panel.Hide()}else{
             $Field=if($Action -like 'auto-*'){'autoUpdate'}elseif($Action -like 'notify-*'){'notifications'}else{'enabled'}
             $Value=$Action -in @('auto-on','notify-on','start')
@@ -222,9 +222,20 @@ function Show-Panel {
 }
 # Always reveal on click: toggling races with Deactivate and double-click events.
 $Tray.Add_MouseClick({param($Sender,$Event) Show-Panel})
+function Complete-TrayJobs {
+    foreach($Job in @($Jobs.ToArray())){
+        if($Job.HasExited){
+            # Keep pending state until the persisted snapshot confirms the result.
+            $Jobs.Remove($Job);$Job.Dispose()
+        }elseif([DateTime]::UtcNow -gt $Job.BiuukaDeadline){
+            try{$Job.Kill()}catch{}
+            $Jobs.Remove($Job);$Job.Dispose()
+        }
+    }
+}
 $Timer=New-Object Windows.Forms.Timer;$Timer.Interval=200
 $Timer.Add_Tick({
-    foreach($Job in @($Jobs.ToArray())){if($Job.HasExited){if($Job.ExitCode -ne 0){$script:Pending=$null;$script:ActionError='设置未保存，请重试'};$Jobs.Remove($Job);$Job.Dispose()}}
+    Complete-TrayJobs
     Refresh-Panel
 })
 $Panel.ResumeLayout($true)

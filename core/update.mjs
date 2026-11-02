@@ -12,7 +12,10 @@ export async function retryFileOperation(operation,action,{wait=ms=>new Promise(
  }
 }
 export async function writeUpdateProgress(state,value){
- const file=path.join(state,'update-status.json'),temp=file+'.'+randomUUID()+'.tmp';
+ return writeAtomicJson(path.join(state,'update-status.json'),value);
+}
+export async function writeAtomicJson(file,value){
+ const temp=file+'.'+randomUUID()+'.tmp';
  try{
   await retryFileOperation('write_progress',()=>writeFile(temp,JSON.stringify(value),{mode:0o600,flag:'w'}));
   await retryFileOperation('write_progress',()=>rename(temp,file));

@@ -21,7 +21,9 @@ export async function installMacTray(remove=false){
 }
 export async function startTray(){const c=await config();const child=spawn(c.node,[path.join(c.baseDir||appDir,'launcher.mjs'),'tray-run'],{detached:true,stdio:'ignore',windowsHide:true,cwd:stateDir});child.unref();}
 export function trayMerchant(value){return merchant(value)||DEFAULT_MERCHANT;}
-export async function trayAction(action){
+export async function trayAction(action,{request=localRequest}={}){
+ const setting={'auto-on':['autoUpdate',true],'auto-off':['autoUpdate',false],'notify-on':['notifications',true],'notify-off':['notifications',false]}[action];
+ if(setting){const response=await request('/control/settings',{[setting[0]]:setting[1]},{timeout:8000});const saved=await response.json();if(saved[setting[0]]!==setting[1])throw Error('Setting was not confirmed');return;}
  if(action==='shop'){const c=await config();openUrl(trayMerchant(c.merchant).url);return;}
  const choices={open:['open'],start:['start'],pause:['stop'],'auto-on':['auto-update','on'],'auto-off':['auto-update','off'],'notify-on':['notifications','on'],'notify-off':['notifications','off'],exit:['service-exit']};
  if(action==='updates'){
@@ -43,8 +45,8 @@ export async function runTray(){
  const cleanup=async()=>{if(stopped)return;stopped=true;clearTimeout(timer);clearInterval(watcher);if(child&&child.exitCode===null&&child.signalCode===null)await new Promise(resolve=>{child.once('exit',resolve);child.kill();});if(await readFile(lock,'utf8').catch(()=>'')===String(process.pid))await rm(lock,{force:true});};
  try{
   const c=await config(),launcher=path.join(c.baseDir||appDir,'launcher.mjs'),statusFile=path.join(stateDir,'tray-status.json');
-  const refresh=async()=>{let health=null,settings={};try{const r=JSON.parse(await readFile(path.join(stateDir,'runtime.json'),'utf8'));if(!Number.isInteger(r.port)||r.port<1024||r.port>65535)throw Error();const res=await fetch(`http://127.0.0.1:${r.port}/health`,{signal:AbortSignal.timeout(1500)});health=await res.json();}catch{}try{settings=JSON.parse(await readFile(path.join(stateDir,'settings.json'),'utf8'));}catch{}if(!stopped){await writePrivate(statusFile,{...trayStatus(health,settings),merchantName:trayMerchant(c.merchant).name});timer=setTimeout(()=>void refresh().catch(()=>{}),1000);}};
-  await refresh();
+  const refresh=async()=>{let health=null,settings={};try{const r=JSON.parse(await readFile(path.join(stateDir,'runtime.json'),'utf8'));if(!Number.isInteger(r.port)||r.port<1024||r.port>65535)throw Error();const res=await fetch(`http://127.0.0.1:${r.port}/health`,{signal:AbortSignal.timeout(1500)});health=await res.json();}catch{}try{settings=JSON.parse(await readFile(path.join(stateDir,'settings.json'),'utf8'));}catch{}if(!stopped){try{await writePrivate(statusFile,{...trayStatus(health,settings),merchantName:trayMerchant(c.merchant).name});}finally{if(!stopped)timer=setTimeout(()=>void refresh().catch(()=>{}),1000);}}};
+  await refresh().catch(()=>{});
   child=process.platform==='darwin'?spawn('/usr/bin/osascript',['-l','JavaScript',path.join(appDir,'tray-macos.js'),c.node,launcher,statusFile,path.join(appDir,'brand.png'),VERSION],{stdio:'ignore',cwd:stateDir}):spawn('powershell.exe',['-NoProfile','-NonInteractive','-STA','-ExecutionPolicy','Bypass','-File',path.join(appDir,'tray-windows.ps1'),'-Node',c.node,'-Launcher',launcher,'-StatusFile',statusFile,'-AppVersion',VERSION],{stdio:'ignore',windowsHide:true,cwd:stateDir});
   const pulse=async()=>{if(stopped)return;if(await trayCloseRequested(stateDir,instance)){await cleanup();return;}if(!stopped)await writePrivate(path.join(stateDir,'tray-instance.json'),{pid:process.pid,instance,build,updatedAt:Date.now()});};
   await pulse();watcher=setInterval(()=>void pulse().catch(()=>{}),1000);

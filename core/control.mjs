@@ -1,10 +1,10 @@
+import {writeAtomicJson} from './update.mjs';
 import {fetchCatalog,nodeCompatible} from './dependencies.mjs';
 import {readTrayState,requestTrayClose} from '../tray/tray-control.mjs';
 import {merchant,DEFAULT_MERCHANT} from './merchant.mjs';
-import {readFile,writeFile,mkdir,rename,rm,readdir,lstat} from 'node:fs/promises';
+import {readFile,mkdir,rm,readdir,lstat} from 'node:fs/promises';
 import {spawn,execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {randomBytes} from 'node:crypto';
 import path from 'node:path';
 import {createVersion} from './version.mjs';
 import {createAccess} from './access.mjs';
@@ -12,7 +12,7 @@ const exec=promisify(execFile);
 export async function createControl({state,config,appDir}){
  await mkdir(state,{recursive:true,mode:0o700});
  const read=async(name,fallback)=>{try{return JSON.parse(await readFile(path.join(state,name),'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
- const write=async(name,value)=>{const file=path.join(state,name),tmp=file+'.'+randomBytes(8).toString('hex');await writeFile(tmp,JSON.stringify(value),{mode:0o600});await rename(tmp,file);};
+ const write=(name,value)=>writeAtomicJson(path.join(state,name),value);
  let settings={autoUpdate:true,notifications:false,engineEnabled:true,networkEnabled:true,...await read('settings.json',{})};let outbound=new AbortController();let serial=Promise.resolve(),lastNotice=0,pendingWrites=0;
  const access=createAccess({grants:await read('grants.json',[]),persist:value=>{pendingWrites++;serial=serial.catch(()=>{}).then(()=>write('grants.json',value)).finally(()=>{pendingWrites--;});return serial;}});
  function save(patch){pendingWrites++;serial=serial.catch(()=>{}).then(async()=>{const next={...settings,...patch};await write('settings.json',next);settings=next;if(!settings.engineEnabled||!settings.networkEnabled){outbound.abort();outbound=new AbortController();process.send?.({type:"cancel-background"});}return {...settings};}).finally(()=>{pendingWrites--;});return serial;}

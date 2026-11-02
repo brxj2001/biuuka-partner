@@ -5,6 +5,8 @@ $Ast=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScr
 if($Errors.Count){throw 'Tray parse failed'}
 $Function=$Ast.Find({param($N) $N -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $N.Name -eq 'Refresh-Panel'},$true)
 Invoke-Expression $Function.Extent.Text
+$Poll=$Ast.Find({param($N) $N -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $N.Name -eq 'Complete-TrayJobs'},$true)
+Invoke-Expression $Poll.Extent.Text
 class TrayFixtureControl {
  [string]$Text;[string]$Tag;[string]$ForeColor;[string]$AccessibleName;[string]$AccessibleDescription
  [bool]$Checked;[bool]$Enabled;[bool]$Visible=$true;[int]$Paints=0;[object[]]$Controls
@@ -33,5 +35,16 @@ try {
  $script:ActionError=$null;$Snapshot.enabled=$false;Save-Fixture;Refresh-Panel
  if($Engine.Checked -or $Engine.Tag -ne 'start' -or $EngineTitle.Text -ne '服务已关闭'){throw 'External state change not reconciled while panel open'}
  if($Panel.Paints -lt 6){throw 'Visible panel not repainted'}
- Write-Host '6 tray state reconciliation checks passed (headless; native rendering requires Windows).'
+ # A helper exit code is not authoritative: the service may have saved already.
+ $script:Pending=@{Field='notifications';Value=$true;Until=[DateTime]::UtcNow.AddSeconds(15)}
+ $Job=[pscustomobject]@{HasExited=$true;ExitCode=1;BiuukaDeadline=[DateTime]::UtcNow;Disposed=$false;Killed=$false}
+ $Job|Add-Member ScriptMethod Dispose {$this.Disposed=$true}
+ $Job|Add-Member ScriptMethod Kill {$this.Killed=$true}
+ $null=$Jobs.Add($Job);Complete-TrayJobs;Refresh-Panel
+ if($Jobs.Count -or !$Job.Disposed -or $script:Pending -or $script:ActionError -or !$Notify.Checked){throw 'Persisted acknowledgement must win over helper exit code'}
+ $Job.HasExited=$false;$Job.Disposed=$false;$Job.BiuukaDeadline=[DateTime]::UtcNow.AddSeconds(-1)
+ $script:Pending=@{Field='notifications';Value=$false;Until=[DateTime]::UtcNow.AddSeconds(-1)}
+ $null=$Jobs.Add($Job);Complete-TrayJobs;Refresh-Panel
+ if($Jobs.Count -or !$Job.Killed -or !$Job.Disposed -or $script:Pending -or !$Notify.Enabled -or !$script:ActionError){throw 'Hung helper must release switches after deadline'}
+ Write-Host '8 tray state reconciliation checks passed (headless; native rendering requires Windows).'
 } finally {Remove-Item -LiteralPath $StatusFile -Force -ErrorAction SilentlyContinue}

@@ -1,7 +1,8 @@
+import {writeAtomicJson} from './update.mjs';
 import {startHttps,readIdentity} from './local-https.mjs';
 import {createScoring} from '../chatgpt/scoring.mjs';
 import {createInstallationInventory} from '../chatgpt/installation-inventory.mjs';
-import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
+import { readFile, mkdir, rm } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
@@ -31,9 +32,7 @@ export async function config() {
 }
 export async function writePrivate(file, value) {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = file + '.' + randomBytes(8).toString('hex');
-  await writeFile(tmp, JSON.stringify(value, null, 2), { mode: 0o600 });
-  await rename(tmp, file);
+  await writeAtomicJson(file,value);
 }
 export function applyHome(c) { process.env.CODEX_HOME = c.codexHome; }
 export function makeBridge(c) { applyHome(c); return new CodexBridge({ command: c.codex, cwd: c.work, codexHome: c.codexHome }); }
@@ -93,12 +92,12 @@ export async function serve() {
   });
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
 }
-export async function localRequest(route, body) {
+export async function localRequest(route, body, {timeout=200000}={}) {
   const r = JSON.parse(await readFile(runtimeFile, 'utf8'));
   const base = `http://127.0.0.1:${r.port}`;
   const response = await fetch(base + route, { method: body ? 'POST' : 'GET',
     headers: { Authorization: `Bearer ${r.token}`, Origin: base, 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(200000) });
+    body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(timeout) });
   if (!response.ok) { const error = await response.json(); throw Error(error.error || 'Local service unavailable'); }
   return response;
 }

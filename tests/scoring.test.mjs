@@ -52,3 +52,20 @@ test('retired routes reject even authorized local clients without calling a prov
  try{for(const action of ['submit','refresh','connection']){const status=await new Promise((resolve,reject)=>{const r=http.request({host:'127.0.0.1',port:server.address().port,path:'/control/scoring/'+action,method:'POST',headers:{Host:'127.0.0.1:17322',Authorization:'Bearer fixture','Content-Type':'application/json'}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});r.on('error',reject);r.end('{}');});assert.equal(status,400);}assert.equal(calls,0);}finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
 });
 test('disabling network aborts in-flight Biuuka scoring and preserves the unknown request',async()=>{let started;const ready=new Promise(r=>started=r);const f=await fixture(async(_url,o)=>{started();return new Promise((_resolve,reject)=>o.signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));});try{const task=f.service.visualSubmit({id:f.record.id});await ready;f.offline();await assert.rejects(task,{code:'network_disabled'});assert(f.service.idle());assert.equal((await f.service.list(f.record.id)).scores[0].status,'unknown');}finally{await f.close();}});
+
+test('missing task after an uncertain submit returns a clean ready state, then explicit confirmation submits the same key',async()=>{
+ let posts=0,key;const f=await fixture(async(url,o)=>{
+  if(url.endsWith('/csrf'))return Response.json({data:{headerName:'X-CSRF-TOKEN',token:'fixture'}},{headers:{'Set-Cookie':'BIUUKA_SESSION=anonymous; Path=/'}});
+  if(o.method==='POST'){posts++;const sent=JSON.parse(o.body);if(!key)key=sent.requestKey;assert.equal(sent.requestKey,key);if(posts===1)throw Error('connection lost before acceptance');return Response.json({data:{requestKey:key,status:'pending'}});}
+  return posts===1?Response.json({}, {status:404}):Response.json({data:{requestKey:key,status:'pending'}});
+ });
+ try{await assert.rejects(f.service.visualSubmit({id:f.record.id}),{code:'score_connection_failed'});assert.equal((await f.service.list(f.record.id)).scores[0].status,'unknown');
+ const recovered=await f.service.visualRefresh({id:f.record.id});assert.equal(recovered.status,'not_submitted');assert.equal(recovered.message,'');assert.equal(posts,1);
+ assert.equal((await f.service.visualRefresh({id:f.record.id})).status,'not_submitted');assert.equal(posts,1);
+ assert.equal((await f.service.visualSubmit({id:f.record.id})).status,'pending');assert.equal(posts,2);await f.service.visualSubmit({id:f.record.id});assert.equal(posts,2);
+ }finally{await f.close();}
+});
+test('explicit confirmation of an old local placeholder checks absence and submits without a second confirmation',async()=>{
+ let posts=0,key;const f=await fixture(async(url,o)=>{if(url.endsWith('/csrf'))return Response.json({data:{headerName:'X-CSRF-TOKEN',token:'fixture'}},{headers:{'Set-Cookie':'BIUUKA_SESSION=anonymous; Path=/'}});if(o.method==='POST'){posts++;assert.equal(JSON.parse(o.body).requestKey,key);return Response.json({data:{requestKey:key,status:'pending'}});}return Response.json({}, {status:404});});
+ try{const t=await f.service.visualStart({id:f.record.id});key=(await f.service.visualInput(t)).requestKey;assert.equal((await f.service.visualSubmit({id:f.record.id})).status,'pending');assert.equal(posts,1);}finally{await f.close();}
+});

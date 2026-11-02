@@ -66,24 +66,28 @@ export function createScoring({state,records,online,fetcher=fetch,now=Date.now})
  }
  async function visualDirect({id,snapshotSvg,refresh=false}){
   if(!online())throw error('network_disabled');if(active)throw error('score_busy');active=true;
-  try{const source=await input(id,snapshotSvg),prior=await load(id,'openenv-vision');
+  try{const source=await input(id,snapshotSvg);let prior=await load(id,'openenv-vision');
    if(prior&&prior.hash!==source.hash)throw error('score_source_changed');
    if(prior?.status==='completed')return prior;
    if(prior&&!prior.anonymous){
     try{await visualRequest(prior.requestKey);return {legacy:true};}catch(e){if(e.httpStatus!==404)throw e;}
     // The old UI created a local placeholder before login. No server task exists, so allow explicit anonymous submission with the same key.
-    return await save(id,'openenv-vision',{...prior,anonymous:true,status:'not_submitted',message:'旧版仅创建了本机记录，尚未提交；可直接确认评分。'});
+    prior=await save(id,'openenv-vision',{...prior,anonymous:true,status:'not_submitted',message:''});
+    if(refresh)return prior;
    }
    if(refresh&&!prior)throw error('score_not_found');
    const value=prior||{provider:'openenv-vision',anonymous:true,hash:source.hash,inputKind:source.inputKind,requestKey:randomUUID(),status:'submitting',createdAt:new Date().toISOString()};
    await save(id,'openenv-vision',value);
+   const querying=!!(prior&&(refresh||prior.status!=='not_submitted'));
    try{
     let data;
     // An existing request is only queried. Even a timeout/restart must never create another model call.
-    if(prior&&(refresh||prior.status!=='not_submitted'))data=await visualRequest(value.requestKey);else data=await visualRequest(value.requestKey,source.svg);
+    if(querying)data=await visualRequest(value.requestKey);else data=await visualRequest(value.requestKey,source.svg);
     let projection;if(data.status==='completed')projection=visualResult(data.result);else if(['pending','unknown','failed','rejected','expired'].includes(data.status))projection={status:data.status,message:text(data.message)};else throw error('score_response_invalid');
     return await save(id,'openenv-vision',{...value,...projection,checkedAt:new Date().toISOString()});
-   }catch(e){await save(id,'openenv-vision',{...value,status:e.httpStatus===404||(!prior&&e.httpStatus===409)?'not_submitted':'unknown',message:e.httpStatus===404?'尚未取得服务器任务，可确认提交。':e.code||'score_remote_failed',checkedAt:new Date().toISOString()});throw e;}
+   }catch(e){const saved=await save(id,'openenv-vision',{...value,status:e.httpStatus===404||(!prior&&e.httpStatus===409)?'not_submitted':'unknown',message:e.httpStatus===404?'':e.code||'score_remote_failed',checkedAt:new Date().toISOString()});
+    // Confirmed absence is recoverable, but querying must never resubmit.
+    if(querying&&e.httpStatus===404)return saved;throw e;}
   }finally{active=false;}
  }
  return {

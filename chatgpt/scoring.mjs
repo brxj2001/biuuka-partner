@@ -24,7 +24,7 @@ export function scoringInput(answer){
 }
 const text=x=>typeof x==='string'?x.slice(0,2000):'';
 export function createScoring({state,records,online,fetcher=fetch,now=Date.now}){
- const root=path.join(state,'scores');let active=false;const visualTickets=new Map();
+ const root=path.join(state,'scores');let active=false,workerFlight=null;const visualTickets=new Map();
  const file=(id,p)=>{if(!uuid.test(id)||!['openenv','openenv-vision','pelicanscore'].includes(p))throw error('score_input_invalid');return path.join(root,id+'-'+p+'.json');};
  const load=async(id,p)=>{try{return JSON.parse(await readFile(file(id,p),'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
  const save=async(id,p,value)=>{await mkdir(root,{recursive:true,mode:0o700});const dest=file(id,p),temp=dest+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(value),{mode:0o600,flag:'wx'});await rename(temp,dest);return value;};
@@ -90,7 +90,34 @@ export function createScoring({state,records,online,fetcher=fetch,now=Date.now})
     if(querying&&e.httpStatus===404)return saved;throw e;}
   }finally{active=false;}
  }
+ // Durable opt-in is written by the test lifecycle, never supplied by a browser.
+ async function runPending(){
+  if(workerFlight||active||!online())return;
+  workerFlight=(async()=>{
+   for(const record of await records.list()){
+    if(!online())break;
+    if(record.autoScore!==true||record.preset!=='pelican'||record.status!=='complete'||!record.saved||!record.threadId||record.origin==='svg-import')continue;
+    let prior=await load(record.id,'openenv-vision');
+    if(prior&&(['completed','failed','rejected','expired'].includes(prior.status)||prior.anonymous===false||prior.retryAt>now()))continue;
+    try{await visualDirect({id:record.id});}
+    catch(e){
+     if(['score_input_invalid','score_svg_required','score_standalone_required','score_unsafe_svg','score_too_large','score_source_changed'].includes(e.code)){
+      await save(record.id,'openenv-vision',{...prior,provider:'openenv-vision',status:'failed',message:e.code,checkedAt:new Date().toISOString()});
+     }
+    }
+    prior=await load(record.id,'openenv-vision');
+    if(prior){
+     // A rejected payload cannot become valid by repeatedly uploading it.
+     if(prior.message==='score_upload_too_large')prior.status='failed';
+     const attempts=(prior.attempts||0)+1;
+     await save(record.id,'openenv-vision',{...prior,attempts,retryAt:now()+(prior.status==='pending'?5000:Math.min(300000,15000*2**Math.min(attempts,5)))});
+    }
+   }
+  })();
+  try{await workerFlight;}finally{workerFlight=null;}
+ }
  return {
+  runPending,
   visualSubmit:args=>visualDirect(args),
   visualRefresh:args=>visualDirect({...args,refresh:true}),
   async visualStart({id,snapshotSvg}){
@@ -115,9 +142,8 @@ export function createScoring({state,records,online,fetcher=fetch,now=Date.now})
    await save(t.id,'openenv-vision',{...prior,...projection,checkedAt:new Date().toISOString()});return {saved:true};
    }finally{active=false;}
   },
-  idle:()=>!active,
+  idle:()=>!active&&!workerFlight,
   async export({id,snapshotSvg}){if(active)throw error('score_busy');active=true;try{return {svg:(await input(id,snapshotSvg)).svg};}finally{active=false;}},
-  async import(svg){const source=scoringInput(svg);if(source.inputKind!=='svg'||/<html\b/i.test(svg))throw error('score_standalone_required');return records.put({id:randomUUID(),createdAt:new Date().toISOString(),preset:'pelican-svg',status:'complete',answer:source.svg,origin:'svg-import',threadId:null,saved:false});},
   async list(id){await records.get(id);const value=await load(id,'openenv-vision');return {scores:value?[value]:[]};},
   async remove(id){if(active)throw error('score_busy');for(const [key,t]of visualTickets)if(t.id===id)visualTickets.delete(key);await Promise.all([...['openenv','openenv-vision','pelicanscore'].map(p=>rm(file(id,p),{force:true})),rm(sourceFile(id),{force:true})]);},
  };

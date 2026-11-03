@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm,readFile,mkdir,writeFile} from 'node:fs/promises';import os from 'node:os';import path from 'node:path';import{Records}from'../chatgpt/records.mjs';import{createScoring,scoringInput}from'../chatgpt/scoring.mjs';
 const svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="20" cy="50" r="10"/></svg>',remoteId='11111111-1111-1111-1111-111111111111';
-async function fixture(fetcher,options={}){const state=await mkdtemp(path.join(os.tmpdir(),'biuuka-score-')),records=new Records(state);let online=true;const service=createScoring({state,records,online:()=>online,fetcher,...options});const record=await service.import(svg);return {state,records,service,record,offline:()=>online=false,close:()=>rm(state,{recursive:true,force:true})};}
+async function fixture(fetcher,options={}){const state=await mkdtemp(path.join(os.tmpdir(),'biuuka-score-')),records=new Records(state);let online=true;const service=createScoring({state,records,online:()=>online,fetcher,...options});const record=await records.begin({preset:'pelican'});Object.assign(record,{status:'complete',saved:true,threadId:'fixture-thread',answer:svg});await records.put(record);return {state,records,service,record,offline:()=>online=false,online:()=>online=true,close:()=>rm(state,{recursive:true,force:true})};}
 import http from 'node:http';import{once}from'node:events';import{createServer}from'../core/server.mjs';
 test('SVG extraction refuses HTML/CSS substitution and active/external content',()=>{assert.equal(scoringInput('```svg\n'+svg+'\n```').svg,svg);for(const text of ['<html><canvas/></html>','<style>svg{opacity:0}</style>'+svg,svg.replace('<circle','<script/><circle'),svg.replace('<circle','<image href="https://example.invalid/x"/><circle')])assert.throws(()=>scoringInput(text));});
 test('quoted local gradient references are allowed; external CSS URLs remain rejected',()=>{assert.doesNotThrow(()=>scoringInput(svg.replace('<circle','<style>.a{fill:url("#gradient")}</style><circle')));assert.throws(()=>scoringInput(svg.replace('<circle','<style>.a{fill:url("https://example.invalid/a")}</style><circle')));});
@@ -49,7 +49,7 @@ test('retired third-party files and cooldowns are hidden and cannot trigger netw
 test('retired routes reject even authorized local clients without calling a provider',async()=>{
  let calls=0;const scoring={submit:async()=>{calls++;},refresh:async()=>{calls++;},connection:async()=>{calls++;}};
  const server=createServer({token:'fixture',refreshMs:0,control:{enabled:()=>false},scoring});server.listen(0,'127.0.0.1');await once(server,'listening');
- try{for(const action of ['submit','refresh','connection']){const status=await new Promise((resolve,reject)=>{const r=http.request({host:'127.0.0.1',port:server.address().port,path:'/control/scoring/'+action,method:'POST',headers:{Host:'127.0.0.1:17322',Authorization:'Bearer fixture','Content-Type':'application/json'}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});r.on('error',reject);r.end('{}');});assert.equal(status,400);}assert.equal(calls,0);}finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
+ try{for(const action of ['submit','refresh','connection','import','visualSubmit','visualRefresh','visualStart']){const status=await new Promise((resolve,reject)=>{const r=http.request({host:'127.0.0.1',port:server.address().port,path:'/control/scoring/'+action,method:'POST',headers:{Host:'127.0.0.1:17322',Authorization:'Bearer fixture','Content-Type':'application/json'}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});r.on('error',reject);r.end('{}');});assert.equal(status,400);}assert.equal(calls,0);}finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
 });
 test('disabling network aborts in-flight Biuuka scoring and preserves the unknown request',async()=>{let started;const ready=new Promise(r=>started=r);const f=await fixture(async(_url,o)=>{started();return new Promise((_resolve,reject)=>o.signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));});try{const task=f.service.visualSubmit({id:f.record.id});await ready;f.offline();await assert.rejects(task,{code:'network_disabled'});assert(f.service.idle());assert.equal((await f.service.list(f.record.id)).scores[0].status,'unknown');}finally{await f.close();}});
 
@@ -72,4 +72,25 @@ test('explicit confirmation of an old local placeholder checks absence and submi
 test('an upload rejected with 413 is not an accepted scoring task',async()=>{
  const f=await fixture(async(url)=>url.endsWith('/csrf')?Response.json({data:{headerName:'X-CSRF-TOKEN',token:'fixture'}},{headers:{'Set-Cookie':'BIUUKA_SESSION=anonymous; Path=/'}}):Response.json({}, {status:413}));
  try{await assert.rejects(f.service.visualSubmit({id:f.record.id}),{code:'score_upload_too_large'});const s=(await f.service.list(f.record.id)).scores[0];assert.equal(s.status,'not_submitted');assert.equal(s.message,'score_upload_too_large');}finally{await f.close();}
+});
+
+const csrf=()=>Response.json({data:{headerName:'X-CSRF-TOKEN',token:'fixture'}},{headers:{'Set-Cookie':'BIUUKA_SESSION=anonymous; Path=/'}});
+test('automatic worker survives restart, pauses offline and never reposts a pending request',async()=>{
+ let posts=0,gets=0,key,time=0;
+ const fetcher=async(url,o)=>{if(url.endsWith('/csrf'))return csrf();if(o.method==='POST'){posts++;key=JSON.parse(o.body).requestKey;}else gets++;return Response.json({data:{requestKey:key,status:'pending'}});};
+ const f=await fixture(fetcher,{now:()=>time});
+ try{await f.records.put({...f.record,autoScore:true});f.offline();await f.service.runPending();assert.equal(posts,0);f.online();await Promise.all([f.service.runPending(),f.service.runPending()]);assert.equal(posts,1);
+ const restarted=createScoring({state:f.state,records:f.records,online:()=>true,fetcher,now:()=>time});await restarted.runPending();assert.equal(gets,0);time=5001;await restarted.runPending();assert.equal(gets,1);assert.equal(posts,1);
+ }finally{await f.close();}
+});
+test('automatic worker excludes historical, imported, incomplete and unsaved tests',async()=>{
+ let calls=0;const f=await fixture(async()=>{calls++;throw Error('unexpected');});
+ try{for(const patch of [{},{autoScore:true,preset:'pelican-svg',origin:'svg-import'},{autoScore:true,status:'failed'},{autoScore:true,saved:false},{autoScore:true,preset:'candy'}]){await f.records.put({...f.record,...patch});await f.service.runPending();}assert.equal(calls,0);
+ await f.records.put({...f.record,autoScore:true,answer:'<html><canvas/></html>'});await f.service.runPending();assert.equal((await f.service.list(f.record.id)).scores[0].status,'failed');assert.equal(calls,0);
+ }finally{await f.close();}
+});
+test('unknown automatic upload queries before retrying the same key after confirmed absence',async()=>{
+ let time=0,posts=0,key;const calls=[];
+ const f=await fixture(async(url,o)=>{if(url.endsWith('/csrf'))return csrf();calls.push(o.method);if(o.method==='POST'){posts++;const sent=JSON.parse(o.body);if(key)assert.equal(sent.requestKey,key);key=sent.requestKey;if(posts===1)throw Error('unknown');return Response.json({data:{requestKey:key,status:'pending'}});}return Response.json({}, {status:404});},{now:()=>time});
+ try{await f.records.put({...f.record,autoScore:true});await f.service.runPending();time=60001;await f.service.runPending();assert.equal(posts,1);time=300001;await f.service.runPending();assert.equal(posts,2);assert.deepEqual(calls,['POST','GET','POST']);}finally{await f.close();}
 });

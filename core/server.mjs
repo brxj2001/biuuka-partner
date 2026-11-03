@@ -161,7 +161,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
     if(req.url.startsWith('/control/')){
       if(!master||!control)return json(403,{error:'control_required'});
       if(req.method!=='POST'||req.headers['content-type']!=='application/json')return json(405,{error:'method_rejected'});
-      try{const input=await bodyJson(['/control/scoring/import','/control/scoring/export','/control/scoring/visualStart','/control/scoring/visualSubmit'].includes(req.url)?6*1024*1024:['/control/sessions/import','/control/sessions/preview'].includes(req.url)?90*1024*1024:req.url.startsWith('/control/sessions/')?65536:4096);
+      try{const input=await bodyJson(['/control/sessions/import','/control/sessions/preview'].includes(req.url)?90*1024*1024:req.url.startsWith('/control/sessions/')?65536:4096);
         if(['/control/instances/register','/control/instances/remove'].includes(req.url)){
           const action=req.url.split('/').at(-1),keys=action==='register'?['path','kind']:['path'];
           if(!instances[action]||Object.keys(input).some(k=>!keys.includes(k)))return json(400,{error:'invalid_request'});
@@ -208,11 +208,11 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
         if(req.url==='/control/boundary/ack'){if(input.version!==1)return json(400,{error:'invalid_request'});await control.save({boundaryVersion:1});return json(200,{acknowledged:true});}
         if(req.url.startsWith('/control/scoring/')){
           if(!scoring)return json(404,{error:'scoring_unavailable'});
-          const action=req.url.slice('/control/scoring/'.length),keys={visualSubmit:['id','snapshotSvg'],visualRefresh:['id'],visualStart:['id','snapshotSvg'],export:['id','snapshotSvg'],import:['svg'],list:['id'],}[action];
+          const action=req.url.slice('/control/scoring/'.length),keys={export:['id'],list:['id']}[action];
           if(!keys||Object.keys(input).some(k=>!keys.includes(k)))return json(400,{error:'invalid_request'});
           if(action==='list')return json(200,await scoring.list(input.id));
           if(busy||draining)return json(409,{error:'busy'});
-          busy=true;try{return json(200,await scoring[action](action==='import'?input.svg:input));}catch(e){return json(409,{error:typeof e.code==='string'&&(e.code.startsWith('score_')||e.code==='network_disabled')?e.code:'score_remote_failed'});}finally{busy=false;}
+          busy=true;try{return json(200,await scoring[action](input));}catch(e){return json(409,{error:typeof e.code==='string'&&(e.code.startsWith('score_')||e.code==='network_disabled')?e.code:'score_remote_failed'});}finally{busy=false;}
         }
         if(req.url==='/control/records')return json(200,{records:records?await records.list():[]});
         if(req.url==='/control/record'){if(!records)return json(404,{error:'records_unavailable'});return json(200,await records.get(input.id));}
@@ -289,7 +289,7 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
         await removeRecord(input.id);json(200,{deleted:true});return;
       }
       await accountPoll?.cancel();
-      if(records&&['/test','/chat'].includes(req.url)){recordStarted=performance.now();record=await records.begin({account:null,model:input.model,effort:input.effort,preset:req.url==='/chat'?'chat':input.preset||'pelican',prompt:input.prompt||PRESETS.find(p=>p.id===(input.preset||'pelican'))?.prompt});}
+      if(records&&['/test','/chat'].includes(req.url)){recordStarted=performance.now();record=await records.begin({account:null,model:input.model,effort:input.effort,preset:req.url==='/chat'?'chat':input.preset||'pelican',autoScore:req.url==='/test'&&(!input.preset||input.preset==='pelican'),prompt:input.prompt||PRESETS.find(p=>p.id===(input.preset||'pelican'))?.prompt});}
       if(!online())throw Error("cancelled");
       bridge = activeBridge = bridgeFactory(); await bridge.initialize();
       if(record){
@@ -328,16 +328,19 @@ export function createServer({ token, port = 17322, bridgeFactory, refreshMs = 1
   });
   live=attachLive(server,{hosts,token,access,snapshot:()=>({service:'biuuka',uiInstance,controlPort:port,version:VERSION,engine:enabled()?'enabled':'disabled',control:!!control,refreshMs,networkRefreshMs:300000,networkEnabled:control?.settings?.().networkEnabled!==false,network:online()?networkReport||null:null,update:updateInfo||null,profile:enabled()?profile||null:null,error:profileError?'account_unavailable':null})});
   server.requestTimeout=15000;server.headersTimeout=10000;server.keepAliveTimeout=5000;server.maxHeadersCount=32;
+  const scoreTick=async()=>{if(busy||draining||!online()||!scoring?.runPending)return;busy=true;try{await scoring.runPending();}catch{}finally{busy=false;}};
+  const scoreTimer=setInterval(()=>void scoreTick(),5000);scoreTimer.unref();
   let timer;
   server.once('listening', () => {
     accountPoll?.start();
+    void scoreTick();
     if (refreshMs <= 0) return;
     void refreshProfile().catch(() => {});
     timer = setInterval(() => void refreshProfile().catch(() => {}), refreshMs);
     timer.unref();
   });
   const networkTimer=setInterval(()=>{void refreshNetwork(true).catch(()=>{});void refreshVersion().catch(()=>{});},300000);networkTimer.unref();
-  server.once('close', () => { cancelProfile?.();void accountPoll?.close().catch(()=>{});void accounts?.close(); clearInterval(networkTimer);clearInterval(timer); profileBridge?.close(); profile = null; });
+  server.once('close', () => { cancelProfile?.();void accountPoll?.close().catch(()=>{});void accounts?.close(); clearInterval(scoreTimer);clearInterval(networkTimer);clearInterval(timer); profileBridge?.close(); profile = null; });
   server.canPrepareUpdate=()=>!(busy||profileFlight||retiringProfile||accountPoll?.idle()===false||accounts?.idle()===false||control?.idle?.()===false||scoring?.idle()===false);
   server.prepareUpdate=()=>{if(!server.canPrepareUpdate())return false;draining=true;clearInterval(timer);void accountPoll?.close().catch(()=>{});return true;};
   return server;

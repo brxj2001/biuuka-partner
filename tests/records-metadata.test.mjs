@@ -7,7 +7,7 @@ for(const mode of ['complete','failed','cancelled','initialize-failed'])test('te
  try{
   await request(server,'/test',{model:'fixture-model',effort:'high'},true,mode==='cancelled');
   let list;for(let i=0;i<20;i++){list=await records.list();if(list[0]?.status!=='running')break;await new Promise(r=>setTimeout(r,10));}
-  const row=list[0];assert.equal(row.status,mode==='complete'?'complete':mode==='cancelled'?'cancelled':'failed');assert.equal(row.preset,'pelican');assert.equal(row.model,'fixture-model');assert.equal(row.effort,'high');assert.ok(Number.isFinite(row.elapsedMs)&&row.elapsedMs>=0);assert.ok(row.finishedAt);
+  const row=list[0];assert.equal(row.status,mode==='complete'?'complete':mode==='cancelled'?'cancelled':'failed');assert.equal(row.preset,'pelican');assert.equal(row.autoScore,true);assert.equal(row.saved,mode==='complete');assert.equal(row.model,'fixture-model');assert.equal(row.effort,'high');assert.ok(Number.isFinite(row.elapsedMs)&&row.elapsedMs>=0);assert.ok(row.finishedAt);
   assert.deepEqual(row.account,mode==='initialize-failed'?null:{email:'execution@example.invalid'});assert.ok(!JSON.stringify(row).includes('PRIVATE-TOKEN'));
   const local=(await request(server,'/control/records')).json();assert.deepEqual(local.records[0].account,row.account);
   const publicList=(await request(server,'/records',{},true)).json();assert.equal(publicList.records[0].account,undefined);assert.ok(!(await request(server,'/record',{id:row.id},true)).text.includes('execution@example.invalid'));
